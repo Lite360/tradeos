@@ -17,7 +17,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === 'POST') {
-      const { id, email, fullName, phoneNumber, avatarUrl } = req.body;
+      let body = req.body;
+      if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch (e) {}
+      }
+      const { id, email, fullName, phoneNumber, avatarUrl } = body || {};
       if (!id || !email) {
         return res.status(400).json({ error: 'id and email are required' });
       }
