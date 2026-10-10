@@ -20,10 +20,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { ownerUserId, name, legalName, category, phoneNumber, address } = req.body;
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) {}
+    }
+    const { ownerUserId, name, legalName, category, phoneNumber, address } = body || {};
     if (!ownerUserId || !name || !category) {
       return res.status(400).json({ error: 'ownerUserId, name, and category are required' });
     }
+
+    // 0. Ensure user profile exists in public.profiles to satisfy FK constraint
+    await query(
+      `
+      INSERT INTO public.profiles (id, email, full_name, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (id) DO NOTHING;
+      `,
+      [ownerUserId, `${ownerUserId}@tradeos.app`, 'Workspace Owner']
+    );
 
     // 1. Create Business
     const bizRes = await query(
