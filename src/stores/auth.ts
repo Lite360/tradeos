@@ -164,10 +164,14 @@ export const useAuthStore = defineStore('auth', {
 
         if (isSupabaseConfigured && supabase) {
           // Register with Supabase Auth
+          const redirectUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined;
           const { data, error } = await supabase.auth.signUp({
             email,
             password,
-            options: { data: { full_name: fullName } }
+            options: {
+              data: { full_name: fullName },
+              emailRedirectTo: redirectUrl
+            }
           });
           if (error) throw error;
 
