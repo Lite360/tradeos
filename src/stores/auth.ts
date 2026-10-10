@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import type { UserProfile, Business, Branch, BusinessRole, SubscriptionPlan } from '@/types';
 import { api } from '@/services/api';
+import { supabase, isSupabaseConfigured } from '@/services/supabase';
 
 interface AuthState {
   user: UserProfile | null;
@@ -88,7 +89,7 @@ export const useAuthStore = defineStore('auth', {
       const biz = this.activeBusiness;
       if (!biz || !state.user) return 'cashier';
       if (biz.ownerUserId === state.user.id) return 'owner';
-      return 'owner'; // Default to owner context for created workspaces
+      return 'owner';
     },
 
     canManageSettings(): boolean {
@@ -114,12 +115,30 @@ export const useAuthStore = defineStore('auth', {
 
   actions: {
     async initializeFromSession() {
+      // 1. If Supabase is configured, check live auth session
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            const profile = await api.syncUserSession({
+              id: session.user.id,
+              email: session.user.email || '',
+              user_metadata: session.user.user_metadata
+            });
+            this.setUser(profile);
+          }
+        } catch (e) {
+          console.warn('[SupabaseAuth] Session check failed, falling back to local storage', e);
+        }
+      }
+
+      // 2. Load cached business state
       const savedUser = localStorage.getItem('tradeos_user');
       const savedBusinesses = localStorage.getItem('tradeos_businesses');
       const savedActiveBiz = localStorage.getItem('tradeos_active_biz');
       const savedActiveBranch = localStorage.getItem('tradeos_active_branch');
 
-      if (savedUser) {
+      if (!this.user && savedUser) {
         try {
           this.user = JSON.parse(savedUser);
           this.isAuthenticated = true;
@@ -157,10 +176,29 @@ export const useAuthStore = defineStore('auth', {
       localStorage.setItem('tradeos_user', JSON.stringify(user));
     },
 
-    async registerWithEmail(email: string, fullName: string) {
+    async registerWithEmail(email: string, fullName: string, password = 'Password123!') {
       this.isLoading = true;
       this.error = null;
       try {
+        if (isSupabaseConfigured && supabase) {
+          const { data, error } = await supabase.auth.signUp({
+            email,
+            password,
+            options: { data: { full_name: fullName } }
+          });
+          if (error) throw error;
+          if (data.user) {
+            const profile = await api.syncUserSession({
+              id: data.user.id,
+              email: data.user.email || email,
+              user_metadata: { full_name: fullName }
+            });
+            this.setUser(profile);
+            return profile;
+          }
+        }
+
+        // Local fallback if Supabase credentials are not populated
         const user: UserProfile = {
           id: 'usr_' + Math.random().toString(36).substring(2, 9),
           email,
@@ -179,10 +217,27 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
-    async loginWithEmail(email: string) {
+    async loginWithEmail(email: string, password = 'Password123!') {
       this.isLoading = true;
       this.error = null;
       try {
+        if (isSupabaseConfigured && supabase) {
+          const { data, error } = await supabase.auth.signInWithPassword({
+            email,
+            password
+          });
+          if (error) throw error;
+          if (data.user) {
+            const profile = await api.syncUserSession({
+              id: data.user.id,
+              email: data.user.email || email,
+              user_metadata: data.user.user_metadata
+            });
+            this.setUser(profile);
+            return profile;
+          }
+        }
+
         const user: UserProfile = {
           id: 'usr_' + Math.random().toString(36).substring(2, 9),
           email,
@@ -202,6 +257,16 @@ export const useAuthStore = defineStore('auth', {
     },
 
     async loginWithGoogle() {
+      if (isSupabaseConfigured && supabase) {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: window.location.origin + '/dashboard'
+          }
+        });
+        if (error) throw error;
+        return;
+      }
       return this.loginWithEmail('owner@business.ng');
     },
 
