@@ -170,10 +170,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ) as branches
         FROM public.businesses b
         LEFT JOIN public.branches br ON br.business_id = b.id
-        WHERE b.owner_user_id = $1
+        WHERE b.owner_user_id = $1 OR b.owner_user_id = $2
         GROUP BY b.id;
         `,
-        [profile.id]
+        [userId || profile.id, profile.id]
       );
 
       return res.status(200).json({
@@ -187,7 +187,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           isSuperAdmin: profile.is_super_admin,
           createdAt: profile.created_at
         },
-        businesses: bizResult.rows
+        businesses: bizResult.rows.map(b => ({
+          id: b.id,
+          ownerUserId: b.owner_user_id,
+          name: b.name,
+          legalName: b.legal_name,
+          category: b.category,
+          currencyCode: b.currency_code,
+          countryCode: b.country_code,
+          phoneNumber: b.phone_number,
+          address: b.address,
+          subscriptionPlanId: b.subscription_plan_id,
+          subscriptionStatus: b.subscription_status,
+          branding: {
+            invoicePrefix: b.invoice_prefix || 'INV-',
+            receiptPrefix: b.receipt_prefix || 'REC-'
+          },
+          branches: b.branches || [],
+          createdAt: b.created_at
+        }))
       });
     }
 

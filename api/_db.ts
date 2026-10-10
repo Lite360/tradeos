@@ -1,18 +1,16 @@
-import { Pool, neonConfig } from '@neondatabase/serverless';
-import ws from 'ws';
-
-// Required for Node.js / Vercel Serverless environment when using websockets
-if (!globalThis.WebSocket) {
-  neonConfig.webSocketConstructor = ws;
-}
+import { Pool } from 'pg';
 
 const connectionString = 
   process.env.DATABASE_URL || 
   process.env.POSTGRES_URL || 
   'postgresql://neondb_owner:npg_SJGitRN3VC7d@ep-small-shape-b73kbp1m-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
+// Standard pg pool configured for serverless execution
 export const pool = new Pool({
   connectionString,
+  ssl: {
+    rejectUnauthorized: false
+  },
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
   max: 10
