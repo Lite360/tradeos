@@ -218,17 +218,22 @@ const route = useRoute();
 const handleEmailLogin = async () => {
   try {
     await authStore.loginWithEmail(email.value, password.value);
-    businessStore.initializeWorkspaceData();
-    const redirect = route.query.redirect as string || '/dashboard';
-    router.push(redirect);
+    if (authStore.businesses.length > 0) {
+      // User has an existing business — load workspace data then go to dashboard
+      await businessStore.initializeWorkspaceData();
+      const redirect = route.query.redirect as string || '/dashboard';
+      router.push(redirect);
+    } else {
+      // New user or no business yet — go to onboarding
+      router.push('/onboarding');
+    }
   } catch {}
 };
 
 const handleGoogleLogin = async () => {
   try {
     await authStore.loginWithGoogle();
-    businessStore.initializeWorkspaceData();
-    router.push('/dashboard');
+    // Google OAuth redirects to /dashboard; the router guard handles the rest
   } catch {}
 };
 </script>

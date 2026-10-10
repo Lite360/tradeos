@@ -48,9 +48,11 @@ const isWorkspaceRoute = computed(() => {
   return route.meta.requiresBusiness === true;
 });
 
-onMounted(async () => {
-  await authStore.initializeFromSession();
-  if (authStore.activeBusinessId) {
+onMounted(() => {
+  // The router guard (index.ts) handles initializeFromSession on cold start.
+  // Here we just load workspace data if the user is already authenticated
+  // (e.g. after a successful login redirect within the same page session).
+  if (authStore.isAuthenticated && authStore.activeBusinessId) {
     businessStore.initializeWorkspaceData();
   }
 });

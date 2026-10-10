@@ -108,54 +108,18 @@ class ApiService {
     phoneNumber?: string;
     address?: string;
   }): Promise<Business> {
-    try {
-      const res = await fetch('/api/create-business', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+    const res = await fetch('/api/create-business', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
 
-      if (res.ok) {
-        return await res.json();
-      }
+    if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      console.warn('[API] create-business error:', body);
-    } catch (e) {
-      console.warn('[API] create-business network error:', e);
+      throw new Error(body.error || 'Failed to create business workspace. Please try again.');
     }
 
-    // Fallback in-memory business workspace so onboarding always succeeds
-    const bizId = `biz_${Date.now()}`;
-    const branchId = `branch_${Date.now()}`;
-    return {
-      id: bizId,
-      ownerUserId: payload.ownerUserId,
-      name: payload.name,
-      legalName: payload.legalName || payload.name,
-      category: payload.category,
-      currencyCode: 'NGN',
-      countryCode: 'NG',
-      phoneNumber: payload.phoneNumber,
-      address: payload.address,
-      subscriptionPlanId: 'plan_free',
-      subscriptionStatus: 'active',
-      branding: {
-        invoicePrefix: 'INV-',
-        receiptPrefix: 'REC-'
-      },
-      branches: [
-        {
-          id: branchId,
-          businessId: bizId,
-          name: 'Main Branch',
-          code: 'MAIN',
-          address: payload.address || '',
-          phoneNumber: payload.phoneNumber || '',
-          isMainBranch: true
-        }
-      ],
-      createdAt: new Date().toISOString()
-    };
+    return res.json();
   }
 }
 

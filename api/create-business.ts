@@ -29,30 +29,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'ownerUserId, name, and category are required' });
     }
 
-    // 0. Ensure ownerUserId is a valid UUID
+    // 0. Ensure ownerUserId is a valid UUID and exists in profiles
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     let resolvedOwnerId = ownerUserId;
     if (!isUuid.test(resolvedOwnerId)) {
-      // Find an existing profile or generate a valid UUID
+      // Invalid UUID - find the first available profile as fallback
       const existingProf = await query(`SELECT id FROM public.profiles LIMIT 1`);
       if (existingProf.rows.length > 0) {
         resolvedOwnerId = existingProf.rows[0].id;
       } else {
         const newProf = await query(
           `INSERT INTO public.profiles (email, full_name, updated_at) VALUES ($1, $2, NOW()) RETURNING id`,
-          [`${Date.now()}@tradeos.app`, 'Workspace Owner']
+          [`owner_${Date.now()}@tradeos.app`, 'Workspace Owner']
         );
         resolvedOwnerId = newProf.rows[0].id;
       }
     } else {
-      await query(
-        `
-        INSERT INTO public.profiles (id, email, full_name, updated_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT (id) DO NOTHING;
-        `,
-        [resolvedOwnerId, `${resolvedOwnerId}@tradeos.app`, 'Workspace Owner']
-      );
+      // Valid UUID - ensure profile exists (sync-user should have done this already)
+      const profCheck = await query(`SELECT id FROM public.profiles WHERE id = $1`, [resolvedOwnerId]);
+      if (profCheck.rows.length === 0) {
+        // Profile doesn't exist yet - create a minimal placeholder
+        await query(
+          `INSERT INTO public.profiles (id, email, full_name, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (email) DO NOTHING`,
+          [resolvedOwnerId, `user_${resolvedOwnerId.slice(0, 8)}@tradeos.app`, 'Workspace Owner']
+        );
+      }
     }
 
     // 1. Create Business

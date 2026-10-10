@@ -114,56 +114,48 @@ export const useAuthStore = defineStore('auth', {
   },
 
   actions: {
+    /**
+     * Initialize auth state from the live Supabase session.
+     * ALL data comes from the database — no localStorage involved.
+     * Call this once on cold start (page refresh / first load).
+     */
     async initializeFromSession() {
-      // Restore cached business context from localStorage if present
-      const cachedBiz = localStorage.getItem('tradeos_businesses');
-      const cachedActiveId = localStorage.getItem('tradeos_active_biz_id');
-      if (cachedBiz) {
-        try {
-          const parsed = JSON.parse(cachedBiz);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            this.businesses = parsed;
-            this.activeBusinessId = cachedActiveId || parsed[0].id;
-            this.activeBranchId = parsed[0].branches?.[0]?.id || null;
-            api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
-          }
-        } catch (e) {}
-      }
-
-      // If Supabase is configured, check live auth session & fetch profile from Neon DB
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session?.user) {
-            const dbData = await api.syncUserSession({
-              id: session.user.id,
-              email: session.user.email || '',
-              user_metadata: session.user.user_metadata
-            });
-            this.user = dbData.user;
-            this.isAuthenticated = true;
-            if (dbData.businesses && dbData.businesses.length > 0) {
-              this.businesses = dbData.businesses;
-              this.activeBusinessId = dbData.businesses[0].id;
-              this.activeBranchId = dbData.businesses[0].branches?.[0]?.id || null;
-              localStorage.setItem('tradeos_businesses', JSON.stringify(dbData.businesses));
-              localStorage.setItem('tradeos_active_biz_id', this.activeBusinessId);
-            }
-            api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
-            return;
-          }
-        } catch (e) {
-          console.warn('[Auth] Database session sync check failed:', e);
-        }
-      }
-
-      // If no active session, ensure clean logged out state
+      // Reset to clean state before loading
       this.user = null;
       this.isAuthenticated = false;
       this.businesses = [];
       this.activeBusinessId = null;
       this.activeBranchId = null;
       api.setWorkspaceContext(null, null);
+
+      if (!isSupabaseConfigured || !supabase) return;
+
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user) return; // No active session → stay logged out
+
+        // Sync profile & businesses from Neon DB
+        const dbData = await api.syncUserSession({
+          id: session.user.id,
+          email: session.user.email || '',
+          user_metadata: session.user.user_metadata
+        });
+
+        this.user = dbData.user;
+        this.isAuthenticated = true;
+
+        if (dbData.businesses && dbData.businesses.length > 0) {
+          this.businesses = dbData.businesses;
+          this.activeBusinessId = dbData.businesses[0].id;
+          this.activeBranchId = dbData.businesses[0].branches?.[0]?.id || null;
+        }
+        // If no businesses → businesses stays [], router will redirect to /onboarding
+
+        api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
+      } catch (e) {
+        console.error('[Auth] Session initialization failed:', e);
+        // Leave state as clean logged-out state set above
+      }
     },
 
     setUser(user: UserProfile) {
@@ -180,7 +172,6 @@ export const useAuthStore = defineStore('auth', {
         }
 
         if (isSupabaseConfigured && supabase) {
-          // Register with Supabase Auth
           const redirectUrl = typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined;
           const { data, error } = await supabase.auth.signUp({
             email,
@@ -193,16 +184,15 @@ export const useAuthStore = defineStore('auth', {
           if (error) throw error;
 
           if (data.user) {
-            // Persist profile to Neon DB (this MUST succeed)
+            // Create profile in Neon DB immediately
             const dbData = await api.syncUserSession({
               id: data.user.id,
               email: data.user.email || email,
               user_metadata: { full_name: fullName }
             });
             this.setUser(dbData.user);
-            if (dbData.businesses && dbData.businesses.length > 0) {
-              this.businesses = dbData.businesses;
-            }
+            // New users have no businesses — they will be routed to /onboarding
+            this.businesses = dbData.businesses || [];
             return dbData.user;
           }
 
@@ -227,25 +217,30 @@ export const useAuthStore = defineStore('auth', {
         }
 
         if (isSupabaseConfigured && supabase) {
-          // Authenticate with Supabase
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password
-          });
+          const { data, error } = await supabase.auth.signInWithPassword({ email, password });
           if (error) throw error;
 
           if (data.user) {
-            // Sync profile from Neon DB (this MUST succeed)
+            // Always fetch fresh from DB — no cache
             const dbData = await api.syncUserSession({
               id: data.user.id,
               email: data.user.email || email,
               user_metadata: data.user.user_metadata
             });
+
             this.setUser(dbData.user);
-            if (dbData.businesses && dbData.businesses.length > 0) {
-              this.businesses = dbData.businesses;
-              this.setActiveBusiness(dbData.businesses[0].id);
+            this.businesses = dbData.businesses || [];
+
+            if (this.businesses.length > 0) {
+              this.activeBusinessId = this.businesses[0].id;
+              this.activeBranchId = this.businesses[0].branches?.[0]?.id || null;
+              api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
+            } else {
+              this.activeBusinessId = null;
+              this.activeBranchId = null;
+              api.setWorkspaceContext(null, null);
             }
+
             return dbData.user;
           }
 
@@ -254,7 +249,6 @@ export const useAuthStore = defineStore('auth', {
 
         throw new Error('Authentication service is not configured. Please contact support.');
       } catch (err: any) {
-        // Provide user-friendly error messages for common Supabase errors
         let message = err.message || 'Login failed';
         if (message.includes('Invalid login credentials')) {
           message = 'Invalid email or password. If you don\'t have an account, please register first.';
@@ -285,42 +279,20 @@ export const useAuthStore = defineStore('auth', {
     async createBusiness(payload: { name: string; category: any; phoneNumber?: string; address?: string }) {
       this.isLoading = true;
       try {
-        const userId = this.user?.id || `user_${Date.now()}`;
-        if (!this.user) {
-          this.user = {
-            id: userId,
-            email: 'user@tradeos.app',
-            fullName: 'Business Owner',
-            isPlatformAdmin: false,
-            isSuperAdmin: false,
-            createdAt: new Date().toISOString()
-          };
-          this.isAuthenticated = true;
+        if (!this.user?.id) {
+          throw new Error('You must be logged in to create a business.');
         }
 
         const newBiz = await api.createBusiness({
-          ownerUserId: userId,
+          ownerUserId: this.user.id,
           ...payload
         });
 
-        // Ensure business has branches array
-        if (!newBiz.branches || newBiz.branches.length === 0) {
-          newBiz.branches = [{
-            id: `br_${Date.now()}`,
-            businessId: newBiz.id,
-            name: 'Main Branch',
-            code: 'MAIN',
-            address: payload.address || '',
-            phoneNumber: payload.phoneNumber || '',
-            isMainBranch: true
-          }];
-        }
-
         this.businesses.push(newBiz);
         this.activeBusinessId = newBiz.id;
-        this.activeBranchId = newBiz.branches[0]?.id || null;
+        this.activeBranchId = newBiz.branches?.[0]?.id || null;
         api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
-        
+
         return newBiz;
       } catch (err: any) {
         console.error('[Auth] Failed to create business workspace:', err);
@@ -350,7 +322,6 @@ export const useAuthStore = defineStore('auth', {
       if (!this.activeBusiness) throw new Error('No active business workspace selected');
       const plan = this.subscriptionPlans.find(p => p.code === planCode);
       if (!plan) throw new Error('Invalid subscription plan');
-
       this.activeBusiness.subscriptionPlanId = plan.id;
       this.activeBusiness.subscriptionStatus = 'active';
       return plan;
@@ -364,12 +335,12 @@ export const useAuthStore = defineStore('auth', {
           console.warn('[Supabase] SignOut error:', e);
         }
       }
+      // Reset all in-memory state — database is the source of truth
       this.user = null;
       this.isAuthenticated = false;
       this.businesses = [];
       this.activeBusinessId = null;
       this.activeBranchId = null;
-      localStorage.clear();
       api.setWorkspaceContext(null, null);
     }
   }

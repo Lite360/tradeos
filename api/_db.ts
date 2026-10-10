@@ -1,4 +1,10 @@
-import { Pool } from 'pg';
+import { Pool, neonConfig } from '@neondatabase/serverless';
+import ws from 'ws';
+
+// Required for Node.js / Vercel Serverless environment when using websockets
+if (!globalThis.WebSocket) {
+  neonConfig.webSocketConstructor = ws;
+}
 
 const connectionString = 
   process.env.DATABASE_URL || 
@@ -7,9 +13,6 @@ const connectionString =
 
 export const pool = new Pool({
   connectionString,
-  ssl: {
-    rejectUnauthorized: false
-  },
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
   max: 10

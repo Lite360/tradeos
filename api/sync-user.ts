@@ -27,6 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const isPlatformAdmin = email.endsWith('@tradeos.ng') || email === 'admin@tradeos.ng';
+      const isSuperAdmin = email === 'admin@tradeos.ng' || email === 'superadmin@tradeos.ng';
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       
       // 1. Check if profile already exists by email

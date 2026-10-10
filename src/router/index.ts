@@ -127,26 +127,45 @@ const router = createRouter({
   ]
 });
 
+// Track whether we have already initialized from the DB session this page load.
+// This prevents redundant API calls on every in-app navigation.
+let sessionInitialized = false;
+
 // Auth & Business Workspace Navigation Guards
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore();
-  if (!authStore.user) {
+
+  // On cold start (page refresh / direct URL hit), initialize from Supabase + Neon DB.
+  // Skip if we already did this during the current page session.
+  if (!sessionInitialized) {
     await authStore.initializeFromSession();
+    sessionInitialized = true;
   }
 
+  // Redirect unauthenticated users to login
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     return next({ name: 'login', query: { redirect: to.fullPath } });
   }
 
+  // Redirect non-super-admins away from admin panel
   if (to.meta.requiresSuperAdmin && !authStore.isSuperAdmin) {
     return next({ name: 'dashboard' });
   }
 
-  if (to.meta.requiresBusiness && (!authStore.activeBusiness || authStore.businesses.length === 0)) {
+  // Redirect authenticated users without a business to onboarding
+  if (to.meta.requiresBusiness && authStore.businesses.length === 0) {
     return next({ name: 'onboarding' });
+  }
+
+  // Redirect authenticated users who already have a business away from onboarding
+  if (to.name === 'onboarding' && authStore.isAuthenticated && authStore.businesses.length > 0) {
+    return next({ name: 'dashboard' });
   }
 
   next();
 });
+
+// Reset the flag on each full page load (not needed for SPA navigations)
+// The flag is module-level so it resets automatically on page refresh.
 
 export default router;
