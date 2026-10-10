@@ -14,10 +14,21 @@
               class="input-field pl-9"
             />
           </div>
-          <button @click="showAddProductModal = true" class="btn-secondary text-xs shrink-0">
-            <Plus class="w-4 h-4" />
-            <span class="hidden sm:inline">New Item</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button 
+              type="button" 
+              @click="showBarcodeScanner = true" 
+              class="btn-secondary text-xs shrink-0 flex items-center gap-1.5 bg-white hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 transition-colors"
+              title="Open Barcode & QR Scanner"
+            >
+              <ScanLine class="w-4 h-4 text-emerald-600" />
+              <span class="hidden sm:inline">Scan Barcode</span>
+            </button>
+            <button @click="showAddProductModal = true" class="btn-secondary text-xs shrink-0">
+              <Plus class="w-4 h-4" />
+              <span class="hidden sm:inline">New Item</span>
+            </button>
+          </div>
         </div>
 
         <!-- Category Filter Tabs -->
@@ -233,7 +244,7 @@
 
         <button type="submit" class="btn-primary w-full justify-center py-2.5">
           <CheckCircle2 class="w-4 h-4" />
-          <span>Confirm & Print Receipt</span>
+          <span>Confirm & Complete Sale</span>
         </button>
       </form>
     </Modal>
@@ -248,7 +259,7 @@
           <div class="text-[10px] text-slate-400">{{ new Date(lastSale.createdAt).toLocaleString() }}</div>
         </div>
 
-        <div class="divide-y divide-slate-100">
+        <div class="divide-y divide-slate-100 max-h-48 overflow-y-auto">
           <div v-for="item in lastSale.items" :key="item.id" class="py-2 flex justify-between">
             <div>
               <div class="font-bold text-tradeos-navy">{{ item.productNameSnapshot }}</div>
@@ -269,17 +280,47 @@
           </div>
         </div>
 
-        <div class="flex gap-3 pt-4 border-t border-slate-100">
-          <button @click="triggerPrint" class="btn-secondary flex-1 justify-center">
+        <!-- Thermal Paper Width Toggle -->
+        <div class="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between">
+          <span class="text-slate-600 font-semibold text-[11px]">Printer Format:</span>
+          <div class="flex gap-1.5">
+            <button 
+              type="button" 
+              @click="receiptPaperWidth = '80mm'" 
+              class="px-2.5 py-1 rounded text-[11px] font-bold border transition-colors"
+              :class="receiptPaperWidth === '80mm' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300'"
+            >
+              80mm Standard
+            </button>
+            <button 
+              type="button" 
+              @click="receiptPaperWidth = '58mm'" 
+              class="px-2.5 py-1 rounded text-[11px] font-bold border transition-colors"
+              :class="receiptPaperWidth === '58mm' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300'"
+            >
+              58mm Compact
+            </button>
+          </div>
+        </div>
+
+        <div class="flex gap-2 pt-2 border-t border-slate-100">
+          <button @click="triggerThermalPrint" class="btn-primary flex-1 justify-center py-2.5">
             <Printer class="w-4 h-4" />
-            <span>Print Receipt</span>
+            <span>Print Thermal ({{ receiptPaperWidth }})</span>
           </button>
-          <button @click="showReceiptModal = false" class="btn-primary flex-1 justify-center">
+          <button @click="showReceiptModal = false" class="btn-secondary px-4 justify-center">
             <span>Done</span>
           </button>
         </div>
       </div>
     </Modal>
+
+    <!-- Barcode & QR Camera Scanner Modal -->
+    <BarcodeScannerModal 
+      :show="showBarcodeScanner" 
+      @close="showBarcodeScanner = false" 
+      @scan="handleBarcodeScanned" 
+    />
   </div>
 </template>
 
@@ -290,10 +331,12 @@ import { useBusinessStore } from '@/stores/business';
 import type { Product, Sale } from '@/types';
 import Modal from '@/components/common/Modal.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
+import BarcodeScannerModal from '@/components/pos/BarcodeScannerModal.vue';
+import { printThermalReceipt } from '@/services/thermalPrinter';
 import { 
   Search, Plus, Package, ShoppingCart, Trash2, 
   CreditCard, CheckCircle2, Banknote, Building, 
-  UserCheck, Printer 
+  UserCheck, Printer, ScanLine 
 } from 'lucide-vue-next';
 
 const authStore = useAuthStore();
@@ -304,6 +347,8 @@ const selectedCategory = ref('all');
 const showAddProductModal = ref(false);
 const showCheckoutModal = ref(false);
 const showReceiptModal = ref(false);
+const showBarcodeScanner = ref(false);
+const receiptPaperWidth = ref<'58mm' | '80mm'>('80mm');
 
 const paymentMethod = ref<Sale['paymentMethod']>('cash');
 const amountPaid = ref(0);
@@ -321,13 +366,28 @@ const filteredProducts = computed(() => {
   return businessStore.products.filter(p => {
     const matchesCat = selectedCategory.value === 'all' || p.categoryId === selectedCategory.value;
     const matchesSearch = p.name.toLowerCase().includes(searchQuery.value.toLowerCase()) || 
-                          p.sku.toLowerCase().includes(searchQuery.value.toLowerCase());
+                          p.sku.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
+                          (p.barcode && p.barcode.toLowerCase().includes(searchQuery.value.toLowerCase()));
     return matchesCat && matchesSearch;
   });
 });
 
 const addToCart = (product: Product) => {
   businessStore.addToCart(product, 1);
+};
+
+const handleBarcodeScanned = (code: string) => {
+  const cleanCode = code.trim().toLowerCase();
+  const matchedProduct = businessStore.products.find(p => 
+    p.sku.toLowerCase() === cleanCode || 
+    (p.barcode && p.barcode.toLowerCase() === cleanCode)
+  );
+
+  if (matchedProduct) {
+    addToCart(matchedProduct);
+  } else {
+    searchQuery.value = code;
+  }
 };
 
 const openCheckoutModal = () => {
@@ -350,7 +410,13 @@ const executeSale = () => {
   }
 };
 
-const triggerPrint = () => {
-  window.print();
+const triggerThermalPrint = () => {
+  if (!lastSale.value) return;
+  printThermalReceipt(
+    lastSale.value,
+    authStore.activeBusiness,
+    authStore.activeBranch,
+    { paperWidth: receiptPaperWidth.value }
+  );
 };
 </script>
