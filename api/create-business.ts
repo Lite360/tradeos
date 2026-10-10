@@ -29,15 +29,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'ownerUserId, name, and category are required' });
     }
 
-    // 0. Ensure user profile exists in public.profiles to satisfy FK constraint
-    await query(
-      `
-      INSERT INTO public.profiles (id, email, full_name, updated_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (id) DO NOTHING;
-      `,
-      [ownerUserId, `${ownerUserId}@tradeos.app`, 'Workspace Owner']
-    );
+    // 0. Ensure ownerUserId is a valid UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let resolvedOwnerId = ownerUserId;
+    if (!isUuid.test(resolvedOwnerId)) {
+      // Find an existing profile or generate a valid UUID
+      const existingProf = await query(`SELECT id FROM public.profiles LIMIT 1`);
+      if (existingProf.rows.length > 0) {
+        resolvedOwnerId = existingProf.rows[0].id;
+      } else {
+        const newProf = await query(
+          `INSERT INTO public.profiles (email, full_name, updated_at) VALUES ($1, $2, NOW()) RETURNING id`,
+          [`${Date.now()}@tradeos.app`, 'Workspace Owner']
+        );
+        resolvedOwnerId = newProf.rows[0].id;
+      }
+    } else {
+      await query(
+        `
+        INSERT INTO public.profiles (id, email, full_name, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (id) DO NOTHING;
+        `,
+        [resolvedOwnerId, `${resolvedOwnerId}@tradeos.app`, 'Workspace Owner']
+      );
+    }
 
     // 1. Create Business
     const bizRes = await query(
@@ -50,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       VALUES ($1, $2, $3, $4, 'NGN', 'NG', $5, $6, 'plan_free', 'active', 'INV-', 'REC-')
       RETURNING *;
       `,
-      [ownerUserId, name, legalName || name, category, phoneNumber || null, address || null]
+      [resolvedOwnerId, name, legalName || name, category, phoneNumber || null, address || null]
     );
 
     const business = bizRes.rows[0];
