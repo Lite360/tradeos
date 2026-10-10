@@ -1,6 +1,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Pool } from 'pg';
 
+function parseRequestBody(req: VercelRequest): any {
+  try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      return JSON.parse(body);
+    }
+    return body || {};
+  } catch (e) {
+    return {};
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS support
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -31,11 +43,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   });
 
   try {
-    let body = req.body;
-    if (typeof body === 'string') {
-      try { body = JSON.parse(body); } catch (e) {}
-    }
-    const { ownerUserId, name, legalName, category, phoneNumber, address } = body || {};
+    const body = parseRequestBody(req);
+    const { ownerUserId, name, legalName, category, phoneNumber, address } = body;
     if (!ownerUserId || !name || !category) {
       await pool.end().catch(() => {});
       return res.status(400).json({ error: 'ownerUserId, name, and category are required' });

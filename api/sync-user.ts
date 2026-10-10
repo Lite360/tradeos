@@ -1,6 +1,18 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Pool } from 'pg';
 
+function parseRequestBody(req: VercelRequest): any {
+  try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      return JSON.parse(body);
+    }
+    return body || {};
+  } catch (e) {
+    return {};
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS support
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -28,13 +40,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === 'POST') {
-      let body = req.body;
-      if (typeof body === 'string') {
-        try {
-          body = JSON.parse(body);
-        } catch (e) {}
-      }
-      const { id, email, fullName, phoneNumber, avatarUrl } = body || {};
+      const body = parseRequestBody(req);
+      const { id, email, fullName, phoneNumber, avatarUrl } = body;
       if (!id || !email) {
         await pool.end().catch(() => {});
         return res.status(400).json({ error: 'id and email are required' });
