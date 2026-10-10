@@ -14,11 +14,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   });
 
   try {
-    const result = await pool.query('SELECT 1 as test, NOW() as time');
+    const profRes = await pool.query('SELECT * FROM public.profiles LIMIT 5');
+    const bizRes = await pool.query('SELECT * FROM public.businesses LIMIT 5');
     await pool.end();
-    return res.status(200).json({ success: true, rows: result.rows });
+    return res.status(200).json({
+      success: true,
+      profiles: profRes.rows,
+      businesses: bizRes.rows
+    });
   } catch (err: any) {
-    await pool.end().catch(() => { });
+    await pool.end().catch(() => {});
     return res.status(500).json({
       success: false,
       error: err.message,
@@ -28,4 +33,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 }
-
