@@ -11,11 +11,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) {}
+    }
     const { 
       businessId, branchId, customerId, invoiceNumber, customerName, 
       customerEmail, customerPhone, issueDate, dueDate, subtotal, 
       totalAmount, notes, items 
-    } = req.body;
+    } = body || {};
 
     await query('BEGIN');
 
