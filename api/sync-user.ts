@@ -27,26 +27,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const isPlatformAdmin = email.endsWith('@tradeos.ng') || email === 'admin@tradeos.ng';
-      const isSuperAdmin = email === 'superadmin@tradeos.ng' || email === 'admin@tradeos.ng';
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      
+      // 1. Check if profile already exists by email
+      const existingRes = await query(`SELECT * FROM public.profiles WHERE email = $1 LIMIT 1`, [email]);
+      let profile: any;
 
-      // Upsert profile in Neon DB (conflict on email or id)
-      const result = await query(
-        `
-        INSERT INTO public.profiles (id, email, full_name, phone_number, avatar_url, is_platform_admin, is_super_admin, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-        ON CONFLICT (email) DO UPDATE 
-        SET 
-          id = EXCLUDED.id,
-          full_name = EXCLUDED.full_name,
-          phone_number = COALESCE(EXCLUDED.phone_number, profiles.phone_number),
-          avatar_url = COALESCE(EXCLUDED.avatar_url, profiles.avatar_url),
-          updated_at = NOW()
-        RETURNING *;
-        `,
-        [id, email, fullName || email.split('@')[0], phoneNumber || null, avatarUrl || null, isPlatformAdmin, isSuperAdmin]
-      );
-
-      const profile = result.rows[0];
+      if (existingRes.rows.length > 0) {
+        // Update existing profile
+        const updateRes = await query(
+          `
+          UPDATE public.profiles 
+          SET 
+            full_name = COALESCE($1, full_name),
+            phone_number = COALESCE($2, phone_number),
+            avatar_url = COALESCE($3, avatar_url),
+            updated_at = NOW()
+          WHERE email = $4
+          RETURNING *;
+          `,
+          [fullName || email.split('@')[0], phoneNumber || null, avatarUrl || null, email]
+        );
+        profile = updateRes.rows[0];
+      } else {
+        // Insert new profile
+        const insertId = isUuid.test(id) ? id : undefined;
+        let insertRes;
+        if (insertId) {
+          insertRes = await query(
+            `
+            INSERT INTO public.profiles (id, email, full_name, phone_number, avatar_url, is_platform_admin, is_super_admin, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+            RETURNING *;
+            `,
+            [insertId, email, fullName || email.split('@')[0], phoneNumber || null, avatarUrl || null, isPlatformAdmin, isSuperAdmin]
+          );
+        } else {
+          insertRes = await query(
+            `
+            INSERT INTO public.profiles (email, full_name, phone_number, avatar_url, is_platform_admin, is_super_admin, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            RETURNING *;
+            `,
+            [email, fullName || email.split('@')[0], phoneNumber || null, avatarUrl || null, isPlatformAdmin, isSuperAdmin]
+          );
+        }
+        profile = insertRes.rows[0];
+      }
 
       // Fetch user's businesses from Neon DB by owner_user_id OR matching profile
       const bizResult = await query(
