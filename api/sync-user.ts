@@ -1,0 +1,160 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { query } from './_db';
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // CORS support
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  try {
+    if (req.method === 'POST') {
+      const { id, email, fullName, phoneNumber, avatarUrl } = req.body;
+      if (!id || !email) {
+        return res.status(400).json({ error: 'id and email are required' });
+      }
+
+      const isPlatformAdmin = email.endsWith('@tradeos.ng') || email === 'admin@tradeos.ng';
+      const isSuperAdmin = email === 'superadmin@tradeos.ng' || email === 'admin@tradeos.ng';
+
+      // Upsert profile in Neon DB
+      const result = await query(
+        `
+        INSERT INTO public.profiles (id, email, full_name, phone_number, avatar_url, is_platform_admin, is_super_admin, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        ON CONFLICT (id) DO UPDATE 
+        SET 
+          full_name = EXCLUDED.full_name,
+          phone_number = COALESCE(EXCLUDED.phone_number, profiles.phone_number),
+          avatar_url = COALESCE(EXCLUDED.avatar_url, profiles.avatar_url),
+          updated_at = NOW()
+        RETURNING *;
+        `,
+        [id, email, fullName || email.split('@')[0], phoneNumber || null, avatarUrl || null, isPlatformAdmin, isSuperAdmin]
+      );
+
+      const profile = result.rows[0];
+
+      // Fetch user's businesses from Neon DB
+      const bizResult = await query(
+        `
+        SELECT b.*, 
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', br.id,
+                'businessId', br.business_id,
+                'name', br.name,
+                'code', br.code,
+                'address', br.address,
+                'phoneNumber', br.phone_number,
+                'isMainBranch', br.is_main
+              )
+            ) FILTER (WHERE br.id IS NOT NULL), '[]'
+          ) as branches
+        FROM public.businesses b
+        LEFT JOIN public.branches br ON br.business_id = b.id
+        WHERE b.owner_user_id = $1
+        GROUP BY b.id;
+        `,
+        [id]
+      );
+
+      return res.status(200).json({
+        user: {
+          id: profile.id,
+          email: profile.email,
+          fullName: profile.full_name,
+          phoneNumber: profile.phone_number,
+          avatarUrl: profile.avatar_url,
+          isPlatformAdmin: profile.is_platform_admin,
+          isSuperAdmin: profile.is_super_admin,
+          createdAt: profile.created_at
+        },
+        businesses: bizResult.rows.map(b => ({
+          id: b.id,
+          ownerUserId: b.owner_user_id,
+          name: b.name,
+          legalName: b.legal_name,
+          category: b.category,
+          currencyCode: b.currency_code,
+          countryCode: b.country_code,
+          phoneNumber: b.phone_number,
+          address: b.address,
+          subscriptionPlanId: b.subscription_plan_id,
+          subscriptionStatus: b.subscription_status,
+          branding: {
+            invoicePrefix: b.invoice_prefix || 'INV-',
+            receiptPrefix: b.receipt_prefix || 'REC-'
+          },
+          branches: b.branches || [],
+          createdAt: b.created_at
+        }))
+      });
+    }
+
+    if (req.method === 'GET') {
+      const { userId } = req.query;
+      if (!userId) {
+        return res.status(400).json({ error: 'userId is required' });
+      }
+
+      const result = await query('SELECT * FROM public.profiles WHERE id = $1', [userId]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'User profile not found in database' });
+      }
+
+      const profile = result.rows[0];
+      const bizResult = await query(
+        `
+        SELECT b.*, 
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', br.id,
+                'businessId', br.business_id,
+                'name', br.name,
+                'code', br.code,
+                'address', br.address,
+                'phoneNumber', br.phone_number,
+                'isMainBranch', br.is_main
+              )
+            ) FILTER (WHERE br.id IS NOT NULL), '[]'
+          ) as branches
+        FROM public.businesses b
+        LEFT JOIN public.branches br ON br.business_id = b.id
+        WHERE b.owner_user_id = $1
+        GROUP BY b.id;
+        `,
+        [userId]
+      );
+
+      return res.status(200).json({
+        user: {
+          id: profile.id,
+          email: profile.email,
+          fullName: profile.full_name,
+          phoneNumber: profile.phone_number,
+          avatarUrl: profile.avatar_url,
+          isPlatformAdmin: profile.is_platform_admin,
+          isSuperAdmin: profile.is_super_admin,
+          createdAt: profile.created_at
+        },
+        businesses: bizResult.rows
+      });
+    }
+
+    return res.status(405).json({ error: 'Method not allowed' });
+  } catch (err: any) {
+    console.error('API /sync-user error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+}

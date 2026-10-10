@@ -115,65 +115,43 @@ export const useAuthStore = defineStore('auth', {
 
   actions: {
     async initializeFromSession() {
-      // 1. If Supabase is configured, check live auth session
+      // 1. If Supabase is configured, check live auth session & fetch authoritative profile from Neon DB
       if (isSupabaseConfigured && supabase) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
           if (session?.user) {
-            const profile = await api.syncUserSession({
+            const dbData = await api.syncUserSession({
               id: session.user.id,
               email: session.user.email || '',
               user_metadata: session.user.user_metadata
             });
-            this.setUser(profile);
+            this.user = dbData.user;
+            this.isAuthenticated = true;
+            if (dbData.businesses && dbData.businesses.length > 0) {
+              this.businesses = dbData.businesses;
+              this.activeBusinessId = dbData.businesses[0].id;
+              this.activeBranchId = dbData.businesses[0].branches?.[0]?.id || null;
+            }
+            api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
+            return;
           }
         } catch (e) {
-          console.warn('[SupabaseAuth] Session check failed, falling back to local storage', e);
+          console.warn('[Auth] Database session sync check failed:', e);
         }
       }
 
-      // 2. Load cached business state
-      const savedUser = localStorage.getItem('tradeos_user');
-      const savedBusinesses = localStorage.getItem('tradeos_businesses');
-      const savedActiveBiz = localStorage.getItem('tradeos_active_biz');
-      const savedActiveBranch = localStorage.getItem('tradeos_active_branch');
-
-      if (!this.user && savedUser) {
-        try {
-          this.user = JSON.parse(savedUser);
-          this.isAuthenticated = true;
-        } catch {
-          this.logout();
-        }
-      }
-
-      if (savedBusinesses) {
-        try {
-          this.businesses = JSON.parse(savedBusinesses);
-        } catch {
-          this.businesses = [];
-        }
-      }
-
-      if (savedActiveBiz && this.businesses.some(b => b.id === savedActiveBiz)) {
-        this.activeBusinessId = savedActiveBiz;
-      } else if (this.businesses.length > 0) {
-        this.activeBusinessId = this.businesses[0].id;
-      }
-
-      if (savedActiveBranch) {
-        this.activeBranchId = savedActiveBranch;
-      } else if (this.activeBusiness?.branches?.[0]) {
-        this.activeBranchId = this.activeBusiness.branches[0].id;
-      }
-
-      api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
+      // 2. If no active session, ensure clean logged out state
+      this.user = null;
+      this.isAuthenticated = false;
+      this.businesses = [];
+      this.activeBusinessId = null;
+      this.activeBranchId = null;
+      api.setWorkspaceContext(null, null);
     },
 
     setUser(user: UserProfile) {
       this.user = user;
       this.isAuthenticated = true;
-      localStorage.setItem('tradeos_user', JSON.stringify(user));
     },
 
     async registerWithEmail(email: string, fullName: string, password = 'Password123!') {
@@ -188,27 +166,27 @@ export const useAuthStore = defineStore('auth', {
           });
           if (error) throw error;
           if (data.user) {
-            const profile = await api.syncUserSession({
+            const dbData = await api.syncUserSession({
               id: data.user.id,
               email: data.user.email || email,
               user_metadata: { full_name: fullName }
             });
-            this.setUser(profile);
-            return profile;
+            this.setUser(dbData.user);
+            if (dbData.businesses && dbData.businesses.length > 0) {
+              this.businesses = dbData.businesses;
+            }
+            return dbData.user;
           }
         }
 
-        // Local fallback if Supabase credentials are not populated
-        const user: UserProfile = {
+        // Direct database upsert with fallback
+        const dbData = await api.syncUserSession({
           id: 'usr_' + Math.random().toString(36).substring(2, 9),
           email,
-          fullName,
-          isPlatformAdmin: email.includes('admin'),
-          isSuperAdmin: email === 'superadmin@tradeos.ng' || email === 'admin@tradeos.ng',
-          createdAt: new Date().toISOString()
-        };
-        this.setUser(user);
-        return user;
+          user_metadata: { full_name: fullName }
+        });
+        this.setUser(dbData.user);
+        return dbData.user;
       } catch (err: any) {
         this.error = err.message || 'Registration failed';
         throw err;
@@ -228,26 +206,27 @@ export const useAuthStore = defineStore('auth', {
           });
           if (error) throw error;
           if (data.user) {
-            const profile = await api.syncUserSession({
+            const dbData = await api.syncUserSession({
               id: data.user.id,
               email: data.user.email || email,
               user_metadata: data.user.user_metadata
             });
-            this.setUser(profile);
-            return profile;
+            this.setUser(dbData.user);
+            if (dbData.businesses && dbData.businesses.length > 0) {
+              this.businesses = dbData.businesses;
+              this.setActiveBusiness(dbData.businesses[0].id);
+            }
+            return dbData.user;
           }
         }
 
-        const user: UserProfile = {
+        const dbData = await api.syncUserSession({
           id: 'usr_' + Math.random().toString(36).substring(2, 9),
           email,
-          fullName: email.split('@')[0],
-          isPlatformAdmin: email.includes('admin'),
-          isSuperAdmin: email === 'superadmin@tradeos.ng' || email === 'admin@tradeos.ng',
-          createdAt: new Date().toISOString()
-        };
-        this.setUser(user);
-        return user;
+          user_metadata: { full_name: email.split('@')[0] }
+        });
+        this.setUser(dbData.user);
+        return dbData.user;
       } catch (err: any) {
         this.error = err.message || 'Login failed';
         throw err;
@@ -280,7 +259,6 @@ export const useAuthStore = defineStore('auth', {
         });
         this.businesses.push(newBiz);
         this.setActiveBusiness(newBiz.id);
-        localStorage.setItem('tradeos_businesses', JSON.stringify(this.businesses));
         return newBiz;
       } finally {
         this.isLoading = false;
@@ -292,10 +270,6 @@ export const useAuthStore = defineStore('auth', {
       if (biz) {
         this.activeBusinessId = biz.id;
         this.activeBranchId = biz.branches?.[0]?.id || null;
-        localStorage.setItem('tradeos_active_biz', biz.id);
-        if (this.activeBranchId) {
-          localStorage.setItem('tradeos_active_branch', this.activeBranchId);
-        }
         api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
       }
     },
@@ -303,7 +277,6 @@ export const useAuthStore = defineStore('auth', {
     setActiveBranch(branchId: string) {
       if (this.activeBusiness?.branches.some(b => b.id === branchId)) {
         this.activeBranchId = branchId;
-        localStorage.setItem('tradeos_active_branch', branchId);
         api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
       }
     },
@@ -315,21 +288,23 @@ export const useAuthStore = defineStore('auth', {
 
       this.activeBusiness.subscriptionPlanId = plan.id;
       this.activeBusiness.subscriptionStatus = 'active';
-
-      localStorage.setItem('tradeos_businesses', JSON.stringify(this.businesses));
       return plan;
     },
 
-    logout() {
+    async logout() {
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await supabase.auth.signOut();
+        } catch (e) {
+          console.warn('[Supabase] SignOut error:', e);
+        }
+      }
       this.user = null;
       this.isAuthenticated = false;
       this.businesses = [];
       this.activeBusinessId = null;
       this.activeBranchId = null;
-      localStorage.removeItem('tradeos_user');
-      localStorage.removeItem('tradeos_businesses');
-      localStorage.removeItem('tradeos_active_biz');
-      localStorage.removeItem('tradeos_active_branch');
+      localStorage.clear();
       api.setWorkspaceContext(null, null);
     }
   }
