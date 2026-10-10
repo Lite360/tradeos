@@ -1,14 +1,27 @@
 -- ==============================================================================
 -- TradeOS Master PostgreSQL & Supabase Database Migration
 -- Multi-Tenant Schema for Nigerian Businesses (Retail, Pharmacy, Boutique, Agro, etc.)
+-- Compatible with standalone Neon PostgreSQL and Supabase
 -- ==============================================================================
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Ensure auth schema and dummy uid helper exists for standalone PostgreSQL (e.g. Neon)
+CREATE SCHEMA IF NOT EXISTS auth;
+
+DO $$ 
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'uid' AND pronamespace = 'auth'::regnamespace) THEN
+    CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $func$
+      SELECT '00000000-0000-0000-0000-000000000000'::uuid;
+    $func$ LANGUAGE SQL STABLE;
+  END IF;
+END $$;
+
 -- 1. USERS & PROFILES
 CREATE TABLE IF NOT EXISTS public.profiles (
-  id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   email TEXT NOT NULL UNIQUE,
   full_name TEXT NOT NULL,
   phone_number TEXT,
@@ -216,14 +229,25 @@ ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can manage businesses they own or belong to" 
-ON public.businesses FOR ALL 
-USING (auth.uid() = owner_user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'businesses' AND policyname = 'Users can manage businesses they own'
+  ) THEN
+    CREATE POLICY "Users can manage businesses they own" 
+    ON public.businesses FOR ALL 
+    USING (auth.uid() = owner_user_id);
+  END IF;
 
-CREATE POLICY "Users can access products for their business" 
-ON public.products FOR ALL 
-USING (
-  business_id IN (
-    SELECT id FROM public.businesses WHERE owner_user_id = auth.uid()
-  )
-);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'products' AND policyname = 'Users can access products for their business'
+  ) THEN
+    CREATE POLICY "Users can access products for their business" 
+    ON public.products FOR ALL 
+    USING (
+      business_id IN (
+        SELECT id FROM public.businesses WHERE owner_user_id = auth.uid()
+      )
+    );
+  END IF;
+END $$;
