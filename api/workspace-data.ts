@@ -1,5 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { query } from './_db';
+import { Pool } from 'pg';
+
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  'postgresql://neondb_owner:npg_SJGitRN3VC7d@ep-small-shape-b73kbp1m-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -10,15 +15,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
+  const pool = new Pool({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000
+  });
+
   try {
     const { businessId } = req.query;
     if (!businessId) {
+      await pool.end().catch(() => {});
       return res.status(400).json({ error: 'businessId is required' });
     }
 
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!isUuid.test(businessId as string)) {
-      // If businessId is a client temp ID (e.g. biz_123), return empty dataset
+      await pool.end().catch(() => {});
       return res.status(200).json({
         categories: [],
         products: [],
@@ -31,7 +43,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Fetch all required data for the business store concurrently
     const [
       categoriesRes,
       productsRes,
@@ -42,9 +53,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       expensesRes,
       movementsRes
     ] = await Promise.all([
-      query(`SELECT * FROM public.categories WHERE business_id = $1 ORDER BY name`, [businessId]),
-      query(`SELECT * FROM public.products WHERE business_id = $1 AND is_active = true ORDER BY name`, [businessId]),
-      query(`
+      pool.query(`SELECT * FROM public.categories WHERE business_id = $1 ORDER BY name`, [businessId]),
+      pool.query(`SELECT * FROM public.products WHERE business_id = $1 AND is_active = true ORDER BY name`, [businessId]),
+      pool.query(`
         SELECT s.*, 
           COALESCE(
             json_agg(
@@ -65,9 +76,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         GROUP BY s.id
         ORDER BY s.created_at DESC LIMIT 100
       `, [businessId]),
-      query(`SELECT * FROM public.customers WHERE business_id = $1 ORDER BY name`, [businessId]),
-      query(`SELECT * FROM public.suppliers WHERE business_id = $1 ORDER BY name`, [businessId]),
-      query(`
+      pool.query(`SELECT * FROM public.customers WHERE business_id = $1 ORDER BY name`, [businessId]),
+      pool.query(`SELECT * FROM public.suppliers WHERE business_id = $1 ORDER BY name`, [businessId]),
+      pool.query(`
         SELECT i.*, 
           COALESCE(
             json_agg(
@@ -87,11 +98,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         GROUP BY i.id
         ORDER BY i.created_at DESC LIMIT 100
       `, [businessId]),
-      query(`SELECT * FROM public.expenses WHERE business_id = $1 ORDER BY date DESC LIMIT 100`, [businessId]),
-      query(`SELECT * FROM public.stock_movements WHERE business_id = $1 ORDER BY created_at DESC LIMIT 100`, [businessId])
+      pool.query(`SELECT * FROM public.expenses WHERE business_id = $1 ORDER BY date DESC LIMIT 100`, [businessId]),
+      pool.query(`SELECT * FROM public.stock_movements WHERE business_id = $1 ORDER BY created_at DESC LIMIT 100`, [businessId])
     ]);
 
-    // Map database snake_case to frontend camelCase where necessary
+    await pool.end().catch(() => {});
+
     const mapProduct = (p: any) => ({
       id: p.id,
       businessId: p.business_id,
@@ -131,8 +143,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         unitCostSnapshot: parseFloat(i.unitCostSnapshot),
         unitPrice: parseFloat(i.unitPrice),
         quantity: parseFloat(i.quantity),
-        lineSubtotal: parseFloat(i.lineTotal), // simplified
-        lineDiscount: 0, // simplified
+        lineSubtotal: parseFloat(i.lineTotal),
+        lineDiscount: 0,
         lineTotal: parseFloat(i.lineTotal)
       })),
       createdAt: s.created_at
@@ -179,6 +191,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       stockMovements: movementsRes.rows.map(m => ({ id: m.id, businessId: m.business_id, branchId: m.branch_id, productId: m.product_id, productName: m.product_name, movementType: m.movement_type, quantityChange: parseFloat(m.quantity_change), quantityAfter: parseFloat(m.quantity_after), unitCost: parseFloat(m.unit_cost || 0), referenceNumber: m.reference_number, reason: m.reason, createdByUserId: m.created_by_user_id, createdByName: m.created_by_name, createdAt: m.created_at }))
     });
   } catch (err: any) {
+    await pool.end().catch(() => {});
     console.error('API /workspace-data error:', err);
     return res.status(500).json({ error: err.message });
   }

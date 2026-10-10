@@ -1,5 +1,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { pool } from './_db';
+import { Pool } from 'pg';
+
+function parseRequestBody(req: VercelRequest): any {
+  try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      return JSON.parse(body);
+    }
+    return body || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  'postgresql://neondb_owner:npg_SJGitRN3VC7d@ep-small-shape-b73kbp1m-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -10,13 +27,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Use a single dedicated client for the transaction
+  const pool = new Pool({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000
+  });
+
   const client = await pool.connect();
   try {
-    let body = req.body;
-    if (typeof body === 'string') {
-      try { body = JSON.parse(body); } catch (e) {}
-    }
+    const body = parseRequestBody(req);
     const {
       businessId, branchId, cashierUserId, customerId, receiptNumber,
       subtotal, discountAmount, taxAmount, totalAmount, amountPaid,
@@ -29,7 +48,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-    // Resolve branch_id
     let resolvedBranchId = (branchId && isUuid.test(branchId)) ? branchId : null;
     if (!resolvedBranchId) {
       const branchRes = await client.query(`SELECT id FROM public.branches WHERE business_id = $1 ORDER BY is_main DESC LIMIT 1`, [businessId]);
@@ -44,7 +62,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Resolve customer_id — must be a real UUID in the customers table
     let resolvedCustomerId = (customerId && isUuid.test(customerId)) ? customerId : null;
     if (resolvedCustomerId) {
       const custCheck = await client.query(`SELECT id FROM public.customers WHERE id = $1`, [resolvedCustomerId]);
@@ -58,8 +75,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     await client.query('BEGIN');
 
-    // NOTE: cashier_staff_id references staff_members, not profiles.
-    // We store null here since we don't have a staff member record for the logged-in owner.
     const saleRes = await client.query(
       `INSERT INTO public.sales (
         business_id, branch_id, cashier_staff_id, customer_id, receipt_number,
@@ -73,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         parseFloat(taxAmount) || 0,
         resolvedTotal,
         resolvedPaid,
-        Math.max(0, resolvedPaid - resolvedTotal), // change returned
+        Math.max(0, resolvedPaid - resolvedTotal),
         paymentMethod || 'cash',
         paymentStatus || 'paid',
         notes || null
@@ -81,7 +96,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
     const saleId = saleRes.rows[0].id;
 
-    // Insert sale items and decrement stock
     for (const item of (items || [])) {
       const resolvedProdId = (item.productId && isUuid.test(item.productId)) ? item.productId : null;
 
@@ -102,7 +116,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ]
       );
 
-      // Decrement stock for physical products with valid product IDs
       if (!item.isService && resolvedProdId) {
         const prodRes = await client.query(`SELECT quantity_on_hand FROM public.products WHERE id = $1`, [resolvedProdId]);
         if (prodRes.rows.length > 0) {
@@ -127,7 +140,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Update customer outstanding debt if any balance remains
     if (resolvedCustomerId && resolvedBalance > 0) {
       await client.query(
         `UPDATE public.customers SET outstanding_debt = outstanding_debt + $1 WHERE id = $2`,
@@ -143,5 +155,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: err.message });
   } finally {
     client.release();
+    await pool.end().catch(() => {});
   }
 }

@@ -1,5 +1,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { query } from './_db';
+import { Pool } from 'pg';
+
+function parseRequestBody(req: VercelRequest): any {
+  try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      return JSON.parse(body);
+    }
+    return body || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  'postgresql://neondb_owner:npg_SJGitRN3VC7d@ep-small-shape-b73kbp1m-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -9,35 +26,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  const pool = new Pool({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000
+  });
+
   try {
     const { action } = req.query;
-
-    let body = req.body;
-    if (typeof body === 'string') {
-      try { body = JSON.parse(body); } catch (e) {}
-    }
+    const body = parseRequestBody(req);
 
     if (req.method === 'POST') {
-      // Accept various field name conventions from the frontend
       const {
         businessId,
-        companyName, name,          // either works
+        companyName, name,
         contactPerson,
-        phone, phoneNumber,          // either works
+        phone, phoneNumber,
         email, address,
         outstandingLiability
       } = body || {};
 
       const supplierName = companyName || name;
       if (!supplierName) {
+        await pool.end().catch(() => {});
         return res.status(400).json({ error: 'Supplier name is required' });
       }
       if (!businessId) {
+        await pool.end().catch(() => {});
         return res.status(400).json({ error: 'businessId is required' });
       }
 
       const resolvedPhone = phone || phoneNumber || null;
-      const result = await query(
+      const result = await pool.query(
         `INSERT INTO public.suppliers (business_id, name, contact_person, phone_number, email, address, outstanding_balance)
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
         [
@@ -48,6 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       const s = result.rows[0];
+      await pool.end().catch(() => {});
       return res.status(200).json({
         id: s.id,
         businessId: s.business_id,
@@ -65,23 +86,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'PUT' && action === 'payment') {
       const { id, amount } = body || {};
       if (!id || !amount) {
+        await pool.end().catch(() => {});
         return res.status(400).json({ error: 'id and amount are required' });
       }
-      const result = await query(
+      const result = await pool.query(
         `UPDATE public.suppliers SET outstanding_balance = GREATEST(0, outstanding_balance - $1) WHERE id = $2 RETURNING *`,
         [parseFloat(amount), id]
       );
       if (result.rows.length === 0) {
+        await pool.end().catch(() => {});
         return res.status(404).json({ error: 'Supplier not found' });
       }
+      await pool.end().catch(() => {});
       return res.status(200).json({
         success: true,
         outstandingLiability: parseFloat(result.rows[0].outstanding_balance)
       });
     }
 
+    await pool.end().catch(() => {});
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (err: any) {
+    await pool.end().catch(() => {});
     console.error('API /suppliers error:', err);
     return res.status(500).json({ error: err.message });
   }

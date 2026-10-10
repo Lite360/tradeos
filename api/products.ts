@@ -1,5 +1,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { query } from './_db';
+import { Pool } from 'pg';
+
+function parseRequestBody(req: VercelRequest): any {
+  try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      return JSON.parse(body);
+    }
+    return body || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+const connectionString =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  'postgresql://neondb_owner:npg_SJGitRN3VC7d@ep-small-shape-b73kbp1m-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -9,25 +26,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  const pool = new Pool({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000
+  });
+
   try {
     const { action } = req.query;
-
-    let body = req.body;
-    if (typeof body === 'string') {
-      try { body = JSON.parse(body); } catch (e) {}
-    }
+    const body = parseRequestBody(req);
 
     // ---- POST: Add Category ----
     if (req.method === 'POST' && action === 'category') {
       const { businessId, name, description } = body || {};
       if (!businessId || !name) {
+        await pool.end().catch(() => {});
         return res.status(400).json({ error: 'businessId and name are required' });
       }
-      const result = await query(
+      const result = await pool.query(
         `INSERT INTO public.categories (business_id, name, description) VALUES ($1, $2, $3) RETURNING *`,
         [businessId, name, description || null]
       );
       const cat = result.rows[0];
+      await pool.end().catch(() => {});
       return res.status(200).json({
         id: cat.id,
         businessId: cat.business_id,
@@ -46,6 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } = body || {};
 
       if (!businessId || !name) {
+        await pool.end().catch(() => {});
         return res.status(400).json({ error: 'businessId and name are required' });
       }
 
@@ -54,11 +76,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Resolve a valid branch_id in the database for this business
       let resolvedBranchId = (branchId && isUuid.test(branchId)) ? branchId : null;
       if (!resolvedBranchId) {
-        const branchRes = await query(`SELECT id FROM public.branches WHERE business_id = $1 ORDER BY is_main DESC LIMIT 1`, [businessId]);
+        const branchRes = await pool.query(`SELECT id FROM public.branches WHERE business_id = $1 ORDER BY is_main DESC LIMIT 1`, [businessId]);
         if (branchRes.rows.length > 0) {
           resolvedBranchId = branchRes.rows[0].id;
         } else {
-          const newBranch = await query(
+          const newBranch = await pool.query(
             `INSERT INTO public.branches (business_id, name, code, is_main, is_active) VALUES ($1, 'Main Branch', 'MAIN', true, true) RETURNING id`,
             [businessId]
           );
@@ -66,13 +88,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      // Validate categoryId
       let resolvedCategoryId = (categoryId && isUuid.test(categoryId)) ? categoryId : null;
-
-      // Generate unique SKU if missing or empty
       const resolvedSku = (sku && sku.trim()) ? sku.trim() : `SKU-${Date.now().toString().slice(-8)}`;
 
-      const result = await query(
+      const result = await pool.query(
         `INSERT INTO public.products (
           business_id, branch_id, category_id, name, sku, barcode, description,
           cost_price, selling_price, quantity_on_hand, reorder_level, unit_of_measure, is_service
@@ -96,9 +115,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const newProd = result.rows[0];
 
-      // Record initial stock movement if quantity > 0
       if (!newProd.is_service && parseFloat(newProd.quantity_on_hand) > 0) {
-        await query(
+        await pool.query(
           `INSERT INTO public.stock_movements (
             business_id, branch_id, product_id, product_name, movement_type,
             quantity_change, quantity_after, unit_cost, reason
@@ -106,6 +124,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           [businessId, resolvedBranchId, newProd.id, newProd.name, newProd.quantity_on_hand, newProd.cost_price]
         );
       }
+
+      await pool.end().catch(() => {});
 
       return res.status(200).json({
         id: newProd.id,
@@ -128,17 +148,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ---- PUT: Stock Adjustment ----
     if (req.method === 'PUT' && action === 'product') {
       const { id, quantityChange, reason } = body || {};
-      if (!id) return res.status(400).json({ error: 'Product id is required' });
+      if (!id) {
+        await pool.end().catch(() => {});
+        return res.status(400).json({ error: 'Product id is required' });
+      }
 
-      const prodRes = await query(`SELECT * FROM public.products WHERE id = $1`, [id]);
-      if (prodRes.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+      const prodRes = await pool.query(`SELECT * FROM public.products WHERE id = $1`, [id]);
+      if (prodRes.rows.length === 0) {
+        await pool.end().catch(() => {});
+        return res.status(404).json({ error: 'Product not found' });
+      }
 
       const prod = prodRes.rows[0];
       const newQty = Math.max(0, parseFloat(prod.quantity_on_hand) + parseFloat(quantityChange));
 
-      await query(`UPDATE public.products SET quantity_on_hand = $1, updated_at = NOW() WHERE id = $2`, [newQty, id]);
+      await pool.query(`UPDATE public.products SET quantity_on_hand = $1, updated_at = NOW() WHERE id = $2`, [newQty, id]);
 
-      await query(
+      await pool.query(
         `INSERT INTO public.stock_movements (
           business_id, branch_id, product_id, product_name, movement_type,
           quantity_change, quantity_after, unit_cost, reason
@@ -146,11 +172,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         [prod.business_id, prod.branch_id, id, prod.name, parseFloat(quantityChange), newQty, prod.cost_price, reason || 'Manual adjustment']
       );
 
+      await pool.end().catch(() => {});
       return res.status(200).json({ success: true, newQuantity: newQty });
     }
 
+    await pool.end().catch(() => {});
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (err: any) {
+    await pool.end().catch(() => {});
     console.error('API /products error:', err);
     return res.status(500).json({ error: err.message });
   }
