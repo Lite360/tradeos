@@ -1,15 +1,33 @@
 import { defineStore } from 'pinia';
-import type { SubscriptionPlan, AuditLog, Business } from '@/types';
+import type { SubscriptionPlan, AuditLog } from '@/types';
+
+export interface PlatformTenant {
+  id: string;
+  name: string;
+  category: string;
+  ownerEmail: string;
+  subscriptionPlanId: string;
+  subscriptionStatus: 'active' | 'past_due' | 'canceled' | 'suspended';
+  branchesCount: number;
+  staffCount: number;
+  productsCount: number;
+  salesVolumeNgn: number;
+  isVerified: boolean;
+  createdAt: string;
+}
 
 interface AdminState {
   plans: SubscriptionPlan[];
   auditLogs: AuditLog[];
-  registeredBusinesses: Partial<Business>[];
+  tenants: PlatformTenant[];
   platformStats: {
-    totalActiveBusinesses: number;
-    totalRegisteredUsers: number;
-    monthlyRecurringRevenue: number;
-    systemHealthStatus: 'Healthy' | 'Degraded' | 'Incident';
+    totalBusinesses: number;
+    activeSubscriptions: number;
+    monthlyRecurringRevenueNgn: number;
+    annualRunRateNgn: number;
+    databaseHealth: 'Healthy' | 'Degraded' | 'Incident';
+    authServiceHealth: 'Healthy' | 'Degraded' | 'Incident';
+    paymentGatewayHealth: 'Healthy' | 'Degraded' | 'Incident';
   };
   isLoading: boolean;
 }
@@ -63,15 +81,82 @@ export const useAdminStore = defineStore('admin', {
         isActive: true,
       }
     ],
-    auditLogs: [],
-    registeredBusinesses: [],
+    auditLogs: [
+      {
+        id: 'log_init_01',
+        actorUserId: 'usr_superadmin',
+        actorName: 'Platform Super Admin',
+        action: 'SUPERADMIN_INITIALIZED',
+        entityType: 'PLATFORM_SECURITY',
+        entityId: 'sec_tradeos_ng',
+        metadata: { status: 'secure_isolated' },
+        createdAt: new Date(Date.now() - 3600000 * 24).toISOString()
+      },
+      {
+        id: 'log_plan_02',
+        actorUserId: 'usr_superadmin',
+        actorName: 'Platform Super Admin',
+        action: 'PRICING_RULE_APPLIED',
+        entityType: 'SUBSCRIPTION_PLANS',
+        entityId: 'plan_pro',
+        metadata: { newPrice: 15000, currency: 'NGN' },
+        createdAt: new Date(Date.now() - 3600000 * 5).toISOString()
+      }
+    ],
+    tenants: [
+      {
+        id: 'biz_demo_01',
+        name: 'Prime Heritage Supermarket',
+        category: 'Supermarket',
+        ownerEmail: 'manager@primeheritage.ng',
+        subscriptionPlanId: 'plan_pro',
+        subscriptionStatus: 'active',
+        branchesCount: 2,
+        staffCount: 6,
+        productsCount: 420,
+        salesVolumeNgn: 1450000,
+        isVerified: true,
+        createdAt: '2026-09-15T09:30:00Z'
+      },
+      {
+        id: 'biz_demo_02',
+        name: 'Apex Health Pharmacy & Diagnostics',
+        category: 'Pharmacy',
+        ownerEmail: 'pharma@apexcare.ng',
+        subscriptionPlanId: 'plan_enterprise',
+        subscriptionStatus: 'active',
+        branchesCount: 4,
+        staffCount: 12,
+        productsCount: 1850,
+        salesVolumeNgn: 3820000,
+        isVerified: true,
+        createdAt: '2026-09-22T14:15:00Z'
+      },
+      {
+        id: 'biz_demo_03',
+        name: 'Urban Threads Boutique',
+        category: 'Boutique',
+        ownerEmail: 'style@urbanthreads.com',
+        subscriptionPlanId: 'plan_free',
+        subscriptionStatus: 'active',
+        branchesCount: 1,
+        staffCount: 2,
+        productsCount: 78,
+        salesVolumeNgn: 340000,
+        isVerified: false,
+        createdAt: '2026-10-02T11:00:00Z'
+      }
+    ],
     platformStats: {
-      totalActiveBusinesses: 1,
-      totalRegisteredUsers: 1,
-      monthlyRecurringRevenue: 0,
-      systemHealthStatus: 'Healthy'
+      totalBusinesses: 3,
+      activeSubscriptions: 2,
+      monthlyRecurringRevenueNgn: 60000,
+      annualRunRateNgn: 720000,
+      databaseHealth: 'Healthy',
+      authServiceHealth: 'Healthy',
+      paymentGatewayHealth: 'Healthy'
     },
-    isLoading: false,
+    isLoading: false
   }),
 
   actions: {
@@ -79,14 +164,41 @@ export const useAdminStore = defineStore('admin', {
       const idx = this.plans.findIndex(p => p.id === planId);
       if (idx !== -1) {
         this.plans[idx] = { ...this.plans[idx], ...updates };
+        this.logAdminAction('PLAN_MODIFIED', 'SUBSCRIPTION_PLAN', planId, updates);
+      }
+    },
+
+    toggleTenantVerification(tenantId: string) {
+      const tenant = this.tenants.find(t => t.id === tenantId);
+      if (tenant) {
+        tenant.isVerified = !tenant.isVerified;
+        this.logAdminAction(
+          tenant.isVerified ? 'TENANT_VERIFIED' : 'TENANT_UNVERIFIED',
+          'BUSINESS_TENANT',
+          tenantId,
+          { name: tenant.name, status: tenant.isVerified }
+        );
+      }
+    },
+
+    setTenantStatus(tenantId: string, status: PlatformTenant['subscriptionStatus']) {
+      const tenant = this.tenants.find(t => t.id === tenantId);
+      if (tenant) {
+        tenant.subscriptionStatus = status;
+        this.logAdminAction(
+          'TENANT_STATUS_CHANGED',
+          'BUSINESS_TENANT',
+          tenantId,
+          { name: tenant.name, status }
+        );
       }
     },
 
     logAdminAction(action: string, entityType: string, entityId: string, metadata = {}) {
       const log: AuditLog = {
-        id: 'log_' + Math.random().toString(36).substring(2, 9),
-        actorUserId: 'superadmin_1',
-        actorName: 'Super Admin',
+        id: 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        actorUserId: 'usr_superadmin',
+        actorName: 'Platform Super Admin',
         action,
         entityType,
         entityId,
