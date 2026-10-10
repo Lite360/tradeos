@@ -13,11 +13,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { action } = req.query;
 
     if (req.method === 'POST') {
-      const { businessId, name, phone, email, address } = req.body;
+      let body = req.body;
+      if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch (e) {}
+      }
+      const { businessId, name, phone, email, address } = body || {};
+      if (!name) {
+        return res.status(400).json({ error: 'Name is required' });
+      }
+
       const result = await query(
         `INSERT INTO public.customers (business_id, name, phone_number, email, address, outstanding_debt) 
          VALUES ($1, $2, $3, $4, $5, 0) RETURNING *`,
-        [businessId, name, phone, email, address]
+        [businessId || null, name, phone || null, email || null, address || null]
       );
       
       const c = result.rows[0];
