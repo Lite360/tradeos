@@ -115,6 +115,21 @@ export const useAuthStore = defineStore('auth', {
 
   actions: {
     async initializeFromSession() {
+      // Restore cached business context from localStorage if present
+      const cachedBiz = localStorage.getItem('tradeos_businesses');
+      const cachedActiveId = localStorage.getItem('tradeos_active_biz_id');
+      if (cachedBiz) {
+        try {
+          const parsed = JSON.parse(cachedBiz);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            this.businesses = parsed;
+            this.activeBusinessId = cachedActiveId || parsed[0].id;
+            this.activeBranchId = parsed[0].branches?.[0]?.id || null;
+            api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
+          }
+        } catch (e) {}
+      }
+
       // If Supabase is configured, check live auth session & fetch profile from Neon DB
       if (isSupabaseConfigured && supabase) {
         try {
@@ -131,6 +146,8 @@ export const useAuthStore = defineStore('auth', {
               this.businesses = dbData.businesses;
               this.activeBusinessId = dbData.businesses[0].id;
               this.activeBranchId = dbData.businesses[0].branches?.[0]?.id || null;
+              localStorage.setItem('tradeos_businesses', JSON.stringify(dbData.businesses));
+              localStorage.setItem('tradeos_active_biz_id', this.activeBusinessId);
             }
             api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
             return;

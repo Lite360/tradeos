@@ -29,13 +29,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const isPlatformAdmin = email.endsWith('@tradeos.ng') || email === 'admin@tradeos.ng';
       const isSuperAdmin = email === 'superadmin@tradeos.ng' || email === 'admin@tradeos.ng';
 
-      // Upsert profile in Neon DB
+      // Upsert profile in Neon DB (conflict on email or id)
       const result = await query(
         `
         INSERT INTO public.profiles (id, email, full_name, phone_number, avatar_url, is_platform_admin, is_super_admin, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-        ON CONFLICT (id) DO UPDATE 
+        ON CONFLICT (email) DO UPDATE 
         SET 
+          id = EXCLUDED.id,
           full_name = EXCLUDED.full_name,
           phone_number = COALESCE(EXCLUDED.phone_number, profiles.phone_number),
           avatar_url = COALESCE(EXCLUDED.avatar_url, profiles.avatar_url),
@@ -47,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const profile = result.rows[0];
 
-      // Fetch user's businesses from Neon DB
+      // Fetch user's businesses from Neon DB by owner_user_id OR matching profile
       const bizResult = await query(
         `
         SELECT b.*, 
@@ -66,10 +67,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ) as branches
         FROM public.businesses b
         LEFT JOIN public.branches br ON br.business_id = b.id
-        WHERE b.owner_user_id = $1
+        WHERE b.owner_user_id = $1 OR b.owner_user_id = $2
         GROUP BY b.id;
         `,
-        [id]
+        [id, profile.id]
       );
 
       return res.status(200).json({
