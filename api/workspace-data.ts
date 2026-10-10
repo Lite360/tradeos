@@ -16,6 +16,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'businessId is required' });
     }
 
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!isUuid.test(businessId as string)) {
+      // If businessId is a client temp ID (e.g. biz_123), return empty dataset
+      return res.status(200).json({
+        categories: [],
+        products: [],
+        sales: [],
+        customers: [],
+        suppliers: [],
+        invoices: [],
+        expenses: [],
+        stockMovements: []
+      });
+    }
+
     // Fetch all required data for the business store concurrently
     const [
       categoriesRes,
