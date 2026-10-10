@@ -107,6 +107,12 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresSuperAdmin: true }
     },
     {
+      path: '/store',
+      name: 'storefront',
+      component: () => import('@/views/storefront/PublicStorefrontView.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
       path: '/terms',
       name: 'terms',
       component: () => import('@/views/legal/TermsView.vue'),

@@ -102,7 +102,7 @@ import { useBusinessStore } from '@/stores/business';
 import { 
   LayoutDashboard, ShoppingCart, Package, FileText, 
   Users, Truck, Wallet, BarChart3, UserCheck, 
-  Settings, ShieldCheck, X 
+  Settings, ShieldCheck, Globe, X 
 } from 'lucide-vue-next';
 
 defineProps<{ isOpen: boolean }>();
@@ -122,6 +122,7 @@ const navItemsCore = computed(() => [
     badge: lowStockCount.value > 0 ? `${lowStockCount.value} low` : undefined 
   },
   { path: '/invoices', label: 'Invoices & Quotations', icon: FileText },
+  { path: '/store', label: 'Online Storefront', icon: Globe },
 ]);
 
 const navItemsFinance = [
