@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { query } from './_db';
+import { Pool } from 'pg';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS support
@@ -19,6 +19,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const connectionString =
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    'postgresql://neondb_owner:npg_SJGitRN3VC7d@ep-small-shape-b73kbp1m-pooler.c-13.us-east-1.aws.neon.tech/neondb?sslmode=require';
+
+  const pool = new Pool({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 10000
+  });
+
   try {
     let body = req.body;
     if (typeof body === 'string') {
@@ -26,30 +37,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const { ownerUserId, name, legalName, category, phoneNumber, address } = body || {};
     if (!ownerUserId || !name || !category) {
+      await pool.end().catch(() => {});
       return res.status(400).json({ error: 'ownerUserId, name, and category are required' });
     }
 
-    // 0. Ensure ownerUserId is a valid UUID and exists in profiles
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     let resolvedOwnerId = ownerUserId;
     if (!isUuid.test(resolvedOwnerId)) {
-      // Invalid UUID - find the first available profile as fallback
-      const existingProf = await query(`SELECT id FROM public.profiles LIMIT 1`);
+      const existingProf = await pool.query(`SELECT id FROM public.profiles LIMIT 1`);
       if (existingProf.rows.length > 0) {
         resolvedOwnerId = existingProf.rows[0].id;
       } else {
-        const newProf = await query(
+        const newProf = await pool.query(
           `INSERT INTO public.profiles (email, full_name, updated_at) VALUES ($1, $2, NOW()) RETURNING id`,
           [`owner_${Date.now()}@tradeos.app`, 'Workspace Owner']
         );
         resolvedOwnerId = newProf.rows[0].id;
       }
     } else {
-      // Valid UUID - ensure profile exists (sync-user should have done this already)
-      const profCheck = await query(`SELECT id FROM public.profiles WHERE id = $1`, [resolvedOwnerId]);
+      const profCheck = await pool.query(`SELECT id FROM public.profiles WHERE id = $1`, [resolvedOwnerId]);
       if (profCheck.rows.length === 0) {
-        // Profile doesn't exist yet - create a minimal placeholder
-        await query(
+        await pool.query(
           `INSERT INTO public.profiles (id, email, full_name, updated_at)
            VALUES ($1, $2, $3, NOW())
            ON CONFLICT (email) DO NOTHING`,
@@ -59,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // 1. Create Business
-    const bizRes = await query(
+    const bizRes = await pool.query(
       `
       INSERT INTO public.businesses (
         owner_user_id, name, legal_name, category, currency_code, country_code,
@@ -75,7 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const business = bizRes.rows[0];
 
     // 2. Create Default Main Branch
-    const branchRes = await query(
+    const branchRes = await pool.query(
       `
       INSERT INTO public.branches (business_id, name, code, address, phone_number, is_main, is_active)
       VALUES ($1, 'Main Branch', 'MAIN', $2, $3, true, true)
@@ -85,6 +93,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
 
     const branch = branchRes.rows[0];
+
+    await pool.end().catch(() => {});
 
     return res.status(200).json({
       id: business.id,
@@ -116,7 +126,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdAt: business.created_at
     });
   } catch (err: any) {
+    await pool.end().catch(() => {});
     console.error('API /create-business error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
