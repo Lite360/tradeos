@@ -308,6 +308,18 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
+    upgradeSubscriptionPlan(planCode: string) {
+      if (!this.activeBusiness) throw new Error('No active business workspace selected');
+      const plan = this.subscriptionPlans.find(p => p.code === planCode);
+      if (!plan) throw new Error('Invalid subscription plan');
+
+      this.activeBusiness.subscriptionPlanId = plan.id;
+      this.activeBusiness.subscriptionStatus = 'active';
+
+      localStorage.setItem('tradeos_businesses', JSON.stringify(this.businesses));
+      return plan;
+    },
+
     logout() {
       this.user = null;
       this.isAuthenticated = false;
