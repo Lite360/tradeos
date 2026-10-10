@@ -11,11 +11,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) {}
+    }
     const { 
       businessId, branchId, cashierUserId, customerId, receiptNumber,
       subtotal, discountAmount, taxAmount, totalAmount, amountPaid,
       paymentMethod, paymentStatus, notes, items 
-    } = req.body;
+    } = body || {};
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let resolvedBranchId = branchId;
+    if (!resolvedBranchId || !isUuid.test(resolvedBranchId)) {
+      const branchRes = await query(`SELECT id FROM public.branches WHERE business_id = $1 LIMIT 1`, [businessId]);
+      if (branchRes.rows.length > 0) {
+        resolvedBranchId = branchRes.rows[0].id;
+      }
+    }
+    const resolvedCustomerId = (customerId && isUuid.test(customerId)) ? customerId : null;
 
     // Begin transaction
     await query('BEGIN');
@@ -23,38 +37,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Insert Sale
     const saleRes = await query(
       `INSERT INTO public.sales (
-        business_id, branch_id, cashier_staff_id, customer_id, receipt_number,
+        business_id, branch_id, customer_id, receipt_number,
         subtotal, discount_amount, tax_amount, total_amount, amount_paid,
         change_returned, payment_method, payment_status, notes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-      [businessId, branchId, cashierUserId || null, customerId || null, receiptNumber, subtotal, discountAmount, taxAmount, totalAmount, amountPaid, 0, paymentMethod, paymentStatus, notes]
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, $11, $12) RETURNING *`,
+      [businessId, resolvedBranchId, resolvedCustomerId, receiptNumber, subtotal || 0, discountAmount || 0, taxAmount || 0, totalAmount || 0, amountPaid || 0, paymentMethod || 'cash', paymentStatus || 'paid', notes || null]
     );
     const saleId = saleRes.rows[0].id;
 
     // Insert Items and Update Stock
-    for (const item of items) {
+    for (const item of (items || [])) {
+      const resolvedProdId = (item.productId && isUuid.test(item.productId)) ? item.productId : null;
       await query(
         `INSERT INTO public.sale_items (
           sale_id, product_id, product_name_snapshot, sku_snapshot, quantity, unit_price, cost_price, line_total
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [saleId, item.productId, item.productNameSnapshot, item.skuSnapshot || 'N/A', item.quantity, item.unitPrice, item.unitCostSnapshot, item.lineTotal]
+        [saleId, resolvedProdId, item.productNameSnapshot || 'Product', item.skuSnapshot || 'N/A', item.quantity || 1, item.unitPrice || 0, item.unitCostSnapshot || 0, item.lineTotal || 0]
       );
 
-      // Update Stock if not service
-      if (!item.isService && item.productId) {
-        const prodRes = await query(`SELECT quantity_on_hand FROM public.products WHERE id = $1`, [item.productId]);
+      // Update Stock if not service and has valid product ID
+      if (!item.isService && resolvedProdId) {
+        const prodRes = await query(`SELECT quantity_on_hand FROM public.products WHERE id = $1`, [resolvedProdId]);
         if (prodRes.rows.length > 0) {
           const currentQty = parseFloat(prodRes.rows[0].quantity_on_hand);
           const newQty = Math.max(0, currentQty - item.quantity);
           
-          await query(`UPDATE public.products SET quantity_on_hand = $1 WHERE id = $2`, [newQty, item.productId]);
+          await query(`UPDATE public.products SET quantity_on_hand = $1 WHERE id = $2`, [newQty, resolvedProdId]);
           
           await query(
             `INSERT INTO public.stock_movements (
               business_id, branch_id, product_id, product_name, movement_type, 
               quantity_change, quantity_after, unit_cost, reference_number, reason
             ) VALUES ($1, $2, $3, $4, 'sale', $5, $6, $7, $8, $9)`,
-            [businessId, branchId, item.productId, item.productNameSnapshot, -item.quantity, newQty, item.unitCostSnapshot, receiptNumber, `POS Sale ${receiptNumber}`]
+            [businessId, resolvedBranchId, resolvedProdId, item.productNameSnapshot, -item.quantity, newQty, item.unitCostSnapshot || 0, receiptNumber, `POS Sale ${receiptNumber}`]
           );
         }
       }

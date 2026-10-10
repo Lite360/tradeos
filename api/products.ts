@@ -12,24 +12,77 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { action } = req.query;
 
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) {}
+    }
+
     if (req.method === 'POST' && action === 'category') {
-      const { businessId, name, description } = req.body;
+      const { businessId, name, description } = body || {};
+      if (!businessId || !name) {
+        return res.status(400).json({ error: 'businessId and name are required' });
+      }
       const result = await query(
         `INSERT INTO public.categories (business_id, name, description) VALUES ($1, $2, $3) RETURNING *`,
-        [businessId, name, description]
+        [businessId, name, description || null]
       );
       return res.status(200).json(result.rows[0]);
     }
 
     if (req.method === 'POST' && action === 'product') {
-      const { businessId, branchId, categoryId, name, sku, barcode, description, costPrice, sellingPrice, quantityOnHand, reorderLevel, unitOfMeasure, isService } = req.body;
-      
+      const { 
+        businessId, branchId, categoryId, name, sku, barcode, 
+        description, costPrice, sellingPrice, quantityOnHand, 
+        reorderLevel, unitOfMeasure, isService 
+      } = body || {};
+
+      if (!businessId || !name) {
+        return res.status(400).json({ error: 'businessId and name are required' });
+      }
+
+      // 1. Resolve a valid branch_id in the database for this business
+      let resolvedBranchId = branchId;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!resolvedBranchId || !isUuid.test(resolvedBranchId)) {
+        const branchRes = await query(`SELECT id FROM public.branches WHERE business_id = $1 LIMIT 1`, [businessId]);
+        if (branchRes.rows.length > 0) {
+          resolvedBranchId = branchRes.rows[0].id;
+        } else {
+          // Create main branch if none exists
+          const newBranch = await query(
+            `INSERT INTO public.branches (business_id, name, code, is_main, is_active) VALUES ($1, 'Main Branch', 'MAIN', true, true) RETURNING id`,
+            [businessId]
+          );
+          resolvedBranchId = newBranch.rows[0].id;
+        }
+      }
+
+      // 2. Resolve categoryId if invalid UUID
+      let resolvedCategoryId = (categoryId && isUuid.test(categoryId)) ? categoryId : null;
+
+      // 3. Generate unique SKU if missing
+      const resolvedSku = sku || `SKU-${Date.now().toString().slice(-6)}`;
+
       const result = await query(
         `INSERT INTO public.products (
           business_id, branch_id, category_id, name, sku, barcode, description, 
           cost_price, selling_price, quantity_on_hand, reorder_level, unit_of_measure, is_service
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
-        [businessId, branchId, categoryId, name, sku, barcode, description, costPrice, sellingPrice, quantityOnHand || 0, reorderLevel || 5, unitOfMeasure || 'pcs', isService || false]
+        [
+          businessId, 
+          resolvedBranchId, 
+          resolvedCategoryId, 
+          name, 
+          resolvedSku, 
+          barcode || null, 
+          description || null, 
+          costPrice || 0, 
+          sellingPrice || 0, 
+          quantityOnHand || 0, 
+          reorderLevel || 5, 
+          unitOfMeasure || 'pcs', 
+          Boolean(isService)
+        ]
       );
 
       const newProd = result.rows[0];
@@ -40,7 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             business_id, branch_id, product_id, product_name, movement_type, 
             quantity_change, quantity_after, unit_cost, reason
           ) VALUES ($1, $2, $3, $4, 'adjustment', $5, $5, $6, 'Initial stock setup')`,
-          [businessId, branchId, newProd.id, newProd.name, newProd.quantity_on_hand, newProd.cost_price]
+          [businessId, resolvedBranchId, newProd.id, newProd.name, newProd.quantity_on_hand, newProd.cost_price]
         );
       }
       return res.status(200).json(newProd);

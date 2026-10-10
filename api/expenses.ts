@@ -11,13 +11,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { businessId, branchId, recordedByUserId, category, amount, paymentMethod, description, expenseDate } = req.body;
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) {}
+    }
+    const { businessId, branchId, recordedByUserId, category, amount, paymentMethod, description, expenseDate } = body || {};
     
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let resolvedBranchId = branchId;
+    if (!resolvedBranchId || !isUuid.test(resolvedBranchId)) {
+      const branchRes = await query(`SELECT id FROM public.branches WHERE business_id = $1 LIMIT 1`, [businessId]);
+      if (branchRes.rows.length > 0) {
+        resolvedBranchId = branchRes.rows[0].id;
+      }
+    }
+    const resolvedUserId = (recordedByUserId && isUuid.test(recordedByUserId)) ? recordedByUserId : null;
+
     const result = await query(
       `INSERT INTO public.expenses (
         business_id, branch_id, recorded_by_user_id, category, amount, payment_method, description, date
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [businessId, branchId, recordedByUserId, category, amount, paymentMethod, description, expenseDate]
+      [businessId, resolvedBranchId, resolvedUserId, category, amount || 0, paymentMethod || 'cash', description || null, expenseDate || new Date().toISOString().split('T')[0]]
     );
 
     const e = result.rows[0];

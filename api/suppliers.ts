@@ -12,12 +12,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { action } = req.query;
 
+    let body = req.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) {}
+    }
+
     if (req.method === 'POST') {
-      const { businessId, companyName, contactPerson, phone, email, address } = req.body;
+      const { businessId, companyName, contactPerson, phone, email, address } = body || {};
+      if (!companyName && !body?.name) {
+        return res.status(400).json({ error: 'Company or supplier name is required' });
+      }
+      const supplierName = companyName || body?.name;
       const result = await query(
         `INSERT INTO public.suppliers (business_id, name, contact_person, phone_number, email, address, outstanding_balance) 
          VALUES ($1, $2, $3, $4, $5, $6, 0) RETURNING *`,
-        [businessId, companyName, contactPerson, phone, email, address]
+        [businessId, supplierName, contactPerson || null, phone || null, email || null, address || null]
       );
       
       const s = result.rows[0];
