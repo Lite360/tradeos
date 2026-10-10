@@ -41,7 +41,15 @@
               <td class="p-3.5 text-right font-bold text-tradeos-navy">
                 ₦{{ inv.totalAmount.toLocaleString('en-NG', { minimumFractionDigits: 2 }) }}
               </td>
-              <td class="p-3.5 text-right">
+              <td class="p-3.5 text-right flex items-center justify-end gap-1.5">
+                <button 
+                  @click="shareOnWhatsApp(inv)" 
+                  class="btn-secondary text-[11px] py-1 px-2.5 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300"
+                  title="Share via WhatsApp"
+                >
+                  <MessageCircle class="w-3.5 h-3.5 text-emerald-600" />
+                  <span class="hidden sm:inline">WhatsApp</span>
+                </button>
                 <button @click="viewInvoice(inv)" class="btn-secondary text-[11px] py-1 px-2.5">
                   <Printer class="w-3 h-3" />
                   <span>Print PDF</span>
@@ -117,11 +125,15 @@
         </div>
 
         <div class="flex gap-3 pt-4 border-t border-slate-100 no-print">
+          <button @click="shareOnWhatsApp(selectedInv)" class="btn-secondary flex-1 justify-center text-emerald-800 border-emerald-300 bg-emerald-50 hover:bg-emerald-100">
+            <MessageCircle class="w-4 h-4 text-emerald-700" />
+            <span>Send via WhatsApp</span>
+          </button>
           <button @click="triggerPrint" class="btn-primary flex-1 justify-center">
             <Printer class="w-4 h-4" />
-            <span>Print PDF</span>
+            <span>Print A4 Invoice</span>
           </button>
-          <button @click="showModal = false" class="btn-secondary flex-1 justify-center">
+          <button @click="showModal = false" class="btn-secondary px-4 justify-center">
             <span>Close</span>
           </button>
         </div>
@@ -139,7 +151,8 @@ import type { Invoice } from '@/types';
 import Modal from '@/components/common/Modal.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import Badge from '@/components/common/Badge.vue';
-import { Plus, FileText, Printer } from 'lucide-vue-next';
+import { printA4Invoice, generateWhatsAppInvoiceShareUrl } from '@/services/invoiceShare';
+import { Plus, FileText, Printer, MessageCircle } from 'lucide-vue-next';
 
 const authStore = useAuthStore();
 const businessStore = useBusinessStore();
@@ -154,6 +167,12 @@ const viewInvoice = (inv: Invoice) => {
 };
 
 const triggerPrint = () => {
-  window.print();
+  if (!selectedInv.value) return;
+  printA4Invoice(selectedInv.value, authStore.activeBusiness, authStore.activeBranch);
+};
+
+const shareOnWhatsApp = (inv: Invoice) => {
+  const url = generateWhatsAppInvoiceShareUrl(inv, authStore.activeBusiness);
+  window.open(url, '_blank');
 };
 </script>
