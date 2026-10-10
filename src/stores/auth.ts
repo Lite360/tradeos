@@ -115,7 +115,7 @@ export const useAuthStore = defineStore('auth', {
 
   actions: {
     async initializeFromSession() {
-      // 1. If Supabase is configured, check live auth session & fetch authoritative profile from Neon DB
+      // If Supabase is configured, check live auth session & fetch profile from Neon DB
       if (isSupabaseConfigured && supabase) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
@@ -140,7 +140,7 @@ export const useAuthStore = defineStore('auth', {
         }
       }
 
-      // 2. If no active session, ensure clean logged out state
+      // If no active session, ensure clean logged out state
       this.user = null;
       this.isAuthenticated = false;
       this.businesses = [];
@@ -154,18 +154,25 @@ export const useAuthStore = defineStore('auth', {
       this.isAuthenticated = true;
     },
 
-    async registerWithEmail(email: string, fullName: string, password = 'Password123!') {
+    async registerWithEmail(email: string, fullName: string, password: string) {
       this.isLoading = true;
       this.error = null;
       try {
+        if (!password || password.length < 6) {
+          throw new Error('Password must be at least 6 characters');
+        }
+
         if (isSupabaseConfigured && supabase) {
+          // Register with Supabase Auth
           const { data, error } = await supabase.auth.signUp({
             email,
             password,
             options: { data: { full_name: fullName } }
           });
           if (error) throw error;
+
           if (data.user) {
+            // Persist profile to Neon DB (this MUST succeed)
             const dbData = await api.syncUserSession({
               id: data.user.id,
               email: data.user.email || email,
@@ -177,16 +184,11 @@ export const useAuthStore = defineStore('auth', {
             }
             return dbData.user;
           }
+
+          throw new Error('Registration did not return a user. Please try again.');
         }
 
-        // Direct database upsert with fallback
-        const dbData = await api.syncUserSession({
-          id: 'usr_' + Math.random().toString(36).substring(2, 9),
-          email,
-          user_metadata: { full_name: fullName }
-        });
-        this.setUser(dbData.user);
-        return dbData.user;
+        throw new Error('Authentication service is not configured. Please contact support.');
       } catch (err: any) {
         this.error = err.message || 'Registration failed';
         throw err;
@@ -195,17 +197,24 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
-    async loginWithEmail(email: string, password = 'Password123!') {
+    async loginWithEmail(email: string, password: string) {
       this.isLoading = true;
       this.error = null;
       try {
+        if (!password) {
+          throw new Error('Password is required');
+        }
+
         if (isSupabaseConfigured && supabase) {
+          // Authenticate with Supabase
           const { data, error } = await supabase.auth.signInWithPassword({
             email,
             password
           });
           if (error) throw error;
+
           if (data.user) {
+            // Sync profile from Neon DB (this MUST succeed)
             const dbData = await api.syncUserSession({
               id: data.user.id,
               email: data.user.email || email,
@@ -218,17 +227,20 @@ export const useAuthStore = defineStore('auth', {
             }
             return dbData.user;
           }
+
+          throw new Error('Login did not return a user. Please try again.');
         }
 
-        const dbData = await api.getUserByEmail(email);
-        this.setUser(dbData.user);
-        if (dbData.businesses && dbData.businesses.length > 0) {
-          this.businesses = dbData.businesses;
-          this.setActiveBusiness(dbData.businesses[0].id);
-        }
-        return dbData.user;
+        throw new Error('Authentication service is not configured. Please contact support.');
       } catch (err: any) {
-        this.error = err.message || 'Login failed - User not found';
+        // Provide user-friendly error messages for common Supabase errors
+        let message = err.message || 'Login failed';
+        if (message.includes('Invalid login credentials')) {
+          message = 'Invalid email or password. If you don\'t have an account, please register first.';
+        } else if (message.includes('Email not confirmed')) {
+          message = 'Please check your email and confirm your account before signing in.';
+        }
+        this.error = message;
         throw err;
       } finally {
         this.isLoading = false;
@@ -246,7 +258,7 @@ export const useAuthStore = defineStore('auth', {
         if (error) throw error;
         return;
       }
-      return this.loginWithEmail('owner@business.ng');
+      throw new Error('Authentication service is not configured. Please contact support.');
     },
 
     async createBusiness(payload: { name: string; category: any; phoneNumber?: string; address?: string }) {
