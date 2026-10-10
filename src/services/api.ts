@@ -12,6 +12,14 @@ class ApiService {
     this.activeBranchId = branchId;
   }
 
+  public async getUserByEmail(email: string): Promise<{ user: UserProfile; businesses: Business[] }> {
+    const res = await fetch(`/api/sync-user?email=${encodeURIComponent(email)}`);
+    if (!res.ok) {
+      throw new Error('User not found');
+    }
+    return res.json();
+  }
+
   // Auth & Sync API - Persists directly to Neon PostgreSQL via /api/sync-user
   public async syncUserSession(supabaseUser: { 
     id: string; 

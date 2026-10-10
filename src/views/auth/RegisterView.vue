@@ -280,7 +280,7 @@ const handleRegister = async () => {
   }
 
   try {
-    await authStore.registerWithEmail(email.value, fullName.value);
+    await authStore.registerWithEmail(email.value, fullName.value, password.value);
     router.push('/onboarding');
   } catch {}
 };

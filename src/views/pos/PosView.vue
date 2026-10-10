@@ -395,9 +395,9 @@ const openCheckoutModal = () => {
   showCheckoutModal.value = true;
 };
 
-const executeSale = () => {
+const executeSale = async () => {
   try {
-    const sale = businessStore.completeSale({
+    const sale = await businessStore.completeSale({
       paymentMethod: paymentMethod.value,
       amountPaid: amountPaid.value,
       customerId: selectedCustomerId.value || undefined

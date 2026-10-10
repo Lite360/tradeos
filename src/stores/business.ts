@@ -118,87 +118,96 @@ export const useBusinessStore = defineStore('business', {
   },
 
   actions: {
-    initializeWorkspaceData() {
+    async initializeWorkspaceData() {
       const authStore = useAuthStore();
       const bizId = authStore.activeBusinessId;
       if (!bizId) return;
 
-      const prefix = `tradeos_${bizId}_`;
-      const cat = localStorage.getItem(prefix + 'categories');
-      const prod = localStorage.getItem(prefix + 'products');
-      const sales = localStorage.getItem(prefix + 'sales');
-      const cust = localStorage.getItem(prefix + 'customers');
-      const supp = localStorage.getItem(prefix + 'suppliers');
-      const inv = localStorage.getItem(prefix + 'invoices');
-      const exp = localStorage.getItem(prefix + 'expenses');
-      const mov = localStorage.getItem(prefix + 'movements');
-
-      if (cat) this.categories = JSON.parse(cat);
-      if (prod) this.products = JSON.parse(prod);
-      if (sales) this.sales = JSON.parse(sales);
-      if (cust) this.customers = JSON.parse(cust);
-      if (supp) this.suppliers = JSON.parse(supp);
-      if (inv) this.invoices = JSON.parse(inv);
-      if (exp) this.expenses = JSON.parse(exp);
-      if (mov) this.stockMovements = JSON.parse(mov);
+      this.isLoading = true;
+      try {
+        const res = await fetch(`/api/workspace-data?businessId=${bizId}`);
+        if (res.ok) {
+          const data = await res.json();
+          this.categories = data.categories || [];
+          this.products = data.products || [];
+          this.sales = data.sales || [];
+          this.customers = data.customers || [];
+          this.suppliers = data.suppliers || [];
+          this.invoices = data.invoices || [];
+          this.expenses = data.expenses || [];
+          this.stockMovements = data.stockMovements || [];
+        }
+      } catch (err) {
+        console.error('Failed to initialize workspace data', err);
+      } finally {
+        this.isLoading = false;
+      }
 
       window.addEventListener('online', () => { this.isOffline = false; });
       window.addEventListener('offline', () => { this.isOffline = true; });
     },
 
     saveWorkspaceData() {
-      const authStore = useAuthStore();
-      const bizId = authStore.activeBusinessId;
-      if (!bizId) return;
-
-      const prefix = `tradeos_${bizId}_`;
-      localStorage.setItem(prefix + 'categories', JSON.stringify(this.categories));
-      localStorage.setItem(prefix + 'products', JSON.stringify(this.products));
-      localStorage.setItem(prefix + 'sales', JSON.stringify(this.sales));
-      localStorage.setItem(prefix + 'customers', JSON.stringify(this.customers));
-      localStorage.setItem(prefix + 'suppliers', JSON.stringify(this.suppliers));
-      localStorage.setItem(prefix + 'invoices', JSON.stringify(this.invoices));
-      localStorage.setItem(prefix + 'expenses', JSON.stringify(this.expenses));
-      localStorage.setItem(prefix + 'movements', JSON.stringify(this.stockMovements));
+      // Deprecated: Now handled by API
     },
 
-    addCategory(name: string, description?: string) {
+    async addCategory(name: string, description?: string) {
       const authStore = useAuthStore();
-      const newCat: ProductCategory = {
-        id: 'cat_' + Math.random().toString(36).substring(2, 9),
-        businessId: authStore.activeBusinessId!,
-        name,
-        description
-      };
-      this.categories.push(newCat);
-      this.saveWorkspaceData();
-      return newCat;
-    },
-
-    addProduct(payload: Omit<Product, 'id' | 'businessId' | 'createdAt'>) {
-      const authStore = useAuthStore();
-      const newProd: Product = {
-        ...payload,
-        id: 'prd_' + Math.random().toString(36).substring(2, 9),
-        businessId: authStore.activeBusinessId!,
-        createdAt: new Date().toISOString()
-      };
-      this.products.push(newProd);
-
-      if (!newProd.isService && (newProd.quantityOnHand || 0) > 0) {
-        this.recordStockMovement({
-          productId: newProd.id,
-          productName: newProd.name,
-          movementType: 'adjustment',
-          quantityChange: newProd.quantityOnHand || 0,
-          quantityAfter: newProd.quantityOnHand || 0,
-          unitCost: newProd.costPrice,
-          reason: 'Initial stock setup'
+      this.isLoading = true;
+      try {
+        const res = await fetch('/api/products?action=category', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ businessId: authStore.activeBusinessId, name, description })
         });
+        if (res.ok) {
+          const newCat = await res.json();
+          const cat = { id: newCat.id, businessId: newCat.business_id, name: newCat.name, description: newCat.description };
+          this.categories.push(cat);
+          return cat;
+        }
+      } finally {
+        this.isLoading = false;
       }
+    },
 
-      this.saveWorkspaceData();
-      return newProd;
+    async addProduct(payload: Omit<Product, 'id' | 'businessId' | 'createdAt'>) {
+      const authStore = useAuthStore();
+      this.isLoading = true;
+      try {
+        const res = await fetch('/api/products?action=product', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            businessId: authStore.activeBusinessId,
+            branchId: authStore.activeBranchId || 'main',
+            ...payload 
+          })
+        });
+        if (res.ok) {
+          const p = await res.json();
+          const newProd: Product = {
+            id: p.id,
+            businessId: p.business_id,
+            categoryId: p.category_id,
+            name: p.name,
+            sku: p.sku,
+            barcode: p.barcode,
+            description: p.description,
+            costPrice: parseFloat(p.cost_price),
+            sellingPrice: parseFloat(p.selling_price),
+            quantityOnHand: parseFloat(p.quantity_on_hand),
+            reorderLevel: parseFloat(p.reorder_level),
+            unitOfMeasure: p.unit_of_measure,
+            isService: p.is_service,
+            createdAt: p.created_at
+          };
+          this.products.push(newProd);
+          return newProd;
+        }
+      } finally {
+        this.isLoading = false;
+      }
     },
 
     updateProduct(productId: string, updates: Partial<Product>) {
@@ -209,25 +218,24 @@ export const useBusinessStore = defineStore('business', {
       }
     },
 
-    adjustStock(productId: string, quantityChange: number, reason: string) {
+    async adjustStock(productId: string, quantityChange: number, reason: string) {
       const prod = this.products.find(p => p.id === productId);
       if (!prod || prod.isService) return;
 
-      const oldQty = prod.quantityOnHand || 0;
-      const newQty = Math.max(0, oldQty + quantityChange);
-      prod.quantityOnHand = newQty;
-
-      this.recordStockMovement({
-        productId: prod.id,
-        productName: prod.name,
-        movementType: 'adjustment',
-        quantityChange,
-        quantityAfter: newQty,
-        unitCost: prod.costPrice,
-        reason
-      });
-
-      this.saveWorkspaceData();
+      try {
+        const res = await fetch('/api/products?action=product', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: productId, quantityChange, reason })
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          prod.quantityOnHand = data.newQuantity;
+        }
+      } catch (err) {
+        console.error('Stock adjustment failed', err);
+      }
     },
 
     recordStockMovement(movement: {
@@ -289,12 +297,12 @@ export const useBusinessStore = defineStore('business', {
       this.cartPaymentMethod = 'cash';
     },
 
-    completeSale(payload: {
+    async completeSale(payload: {
       paymentMethod: Sale['paymentMethod'];
       amountPaid: number;
       customerId?: string;
       notes?: string;
-    }): Sale {
+    }): Promise<Sale> {
       const authStore = useAuthStore();
       if (this.cart.length === 0) throw new Error('Cart is empty');
 
@@ -314,26 +322,8 @@ export const useBusinessStore = defineStore('business', {
       const customer = payload.customerId ? this.customers.find(c => c.id === payload.customerId) : null;
 
       const saleItems: SaleItem[] = this.cart.map(item => {
-        const prod = this.products.find(p => p.id === item.product.id);
-        if (prod && !prod.isService) {
-          const currentQty = prod.quantityOnHand || 0;
-          const newQty = Math.max(0, currentQty - item.quantity);
-          prod.quantityOnHand = newQty;
-
-          this.recordStockMovement({
-            productId: prod.id,
-            productName: prod.name,
-            movementType: 'sale',
-            quantityChange: -item.quantity,
-            quantityAfter: newQty,
-            unitCost: prod.costPrice,
-            referenceNumber: receiptNumber,
-            reason: `POS Sale ${receiptNumber}`
-          });
-        }
-
         return {
-          id: 'item_' + Math.random().toString(36).substring(2, 9),
+          id: 'item_' + Math.random().toString(36).substring(2, 9), // Local temp ID
           productId: item.product.id,
           productNameSnapshot: item.product.name,
           unitCostSnapshot: item.product.costPrice,
@@ -344,10 +334,6 @@ export const useBusinessStore = defineStore('business', {
           lineTotal: (item.unitPrice * item.quantity) - item.discount
         };
       });
-
-      if (customer && balanceDue > 0) {
-        customer.outstandingDebt = (customer.outstandingDebt || 0) + balanceDue;
-      }
 
       const sale: Sale = {
         id: 'sale_' + Math.random().toString(36).substring(2, 9),
@@ -372,60 +358,100 @@ export const useBusinessStore = defineStore('business', {
         createdAt: new Date().toISOString()
       };
 
-      this.sales.unshift(sale);
-      this.clearCart();
-      this.saveWorkspaceData();
-      return sale;
+      try {
+        const res = await fetch('/api/sales', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sale)
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          sale.id = data.saleId; // Update with DB ID
+          this.sales.unshift(sale);
+          
+          // Optimistically update local stock
+          this.cart.forEach(item => {
+            const prod = this.products.find(p => p.id === item.product.id);
+            if (prod && !prod.isService) {
+              prod.quantityOnHand = Math.max(0, (prod.quantityOnHand || 0) - item.quantity);
+            }
+          });
+          
+          if (customer && balanceDue > 0) {
+            customer.outstandingDebt = (customer.outstandingDebt || 0) + balanceDue;
+          }
+          
+          this.clearCart();
+          return sale;
+        } else {
+          throw new Error('Failed to record sale');
+        }
+      } catch (err: any) {
+        throw new Error(err.message || 'Network error');
+      }
     },
 
-    addCustomer(payload: Omit<Customer, 'id' | 'businessId' | 'outstandingDebt' | 'createdAt'>) {
+    async addCustomer(payload: Omit<Customer, 'id' | 'businessId' | 'outstandingDebt' | 'createdAt'>) {
       const authStore = useAuthStore();
-      const newCust: Customer = {
-        ...payload,
-        id: 'cust_' + Math.random().toString(36).substring(2, 9),
-        businessId: authStore.activeBusinessId!,
-        outstandingDebt: 0,
-        createdAt: new Date().toISOString()
-      };
-      this.customers.push(newCust);
-      this.saveWorkspaceData();
-      return newCust;
+      const res = await fetch('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessId: authStore.activeBusinessId, ...payload })
+      });
+      if (res.ok) {
+        const c = await res.json();
+        this.customers.push(c);
+        return c;
+      }
     },
 
-    recordCustomerDebtPayment(customerId: string, amount: number) {
-      const cust = this.customers.find(c => c.id === customerId);
-      if (!cust) return;
-      cust.outstandingDebt = Math.max(0, (cust.outstandingDebt || 0) - amount);
-      this.saveWorkspaceData();
+    async recordCustomerDebtPayment(customerId: string, amount: number) {
+      const res = await fetch('/api/customers?action=payment', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: customerId, amount })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const cust = this.customers.find(c => c.id === customerId);
+        if (cust) cust.outstandingDebt = data.outstandingDebt;
+      }
     },
 
-    addSupplier(payload: Omit<Supplier, 'id' | 'businessId' | 'outstandingLiability' | 'createdAt'>) {
+    async addSupplier(payload: Omit<Supplier, 'id' | 'businessId' | 'outstandingLiability' | 'createdAt'>) {
       const authStore = useAuthStore();
-      const newSupp: Supplier = {
-        ...payload,
-        id: 'supp_' + Math.random().toString(36).substring(2, 9),
-        businessId: authStore.activeBusinessId!,
-        outstandingLiability: 0,
-        createdAt: new Date().toISOString()
-      };
-      this.suppliers.push(newSupp);
-      this.saveWorkspaceData();
-      return newSupp;
+      const res = await fetch('/api/suppliers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ businessId: authStore.activeBusinessId, ...payload })
+      });
+      if (res.ok) {
+        const s = await res.json();
+        this.suppliers.push(s);
+        return s;
+      }
     },
 
-    recordSupplierLiabilityPayment(supplierId: string, amount: number) {
-      const supp = this.suppliers.find(s => s.id === supplierId);
-      if (!supp) return;
-      supp.outstandingLiability = Math.max(0, (supp.outstandingLiability || 0) - amount);
-      this.saveWorkspaceData();
+    async recordSupplierLiabilityPayment(supplierId: string, amount: number) {
+      const res = await fetch('/api/suppliers?action=payment', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: supplierId, amount })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const supp = this.suppliers.find(s => s.id === supplierId);
+        if (supp) supp.outstandingLiability = data.outstandingLiability;
+      }
     },
 
-    createInvoice(payload: {
+    async createInvoice(payload: {
       customerId: string;
       dueDate: string;
       items: { description: string; unitPrice: number; quantity: number }[];
       notes?: string;
-    }): Invoice {
+    }) {
       const authStore = useAuthStore();
       const customer = this.customers.find(c => c.id === payload.customerId);
       if (!customer) throw new Error('Customer not found');
@@ -436,15 +462,13 @@ export const useBusinessStore = defineStore('business', {
       const totalAmount = subtotal;
 
       const invoiceItems = payload.items.map(item => ({
-        id: 'invitem_' + Math.random().toString(36).substring(2, 9),
         description: item.description,
         unitPrice: item.unitPrice,
         quantity: item.quantity,
         lineTotal: item.unitPrice * item.quantity
       }));
 
-      const invoice: Invoice = {
-        id: 'inv_' + Math.random().toString(36).substring(2, 9),
+      const invoicePayload = {
         businessId: authStore.activeBusinessId!,
         branchId: authStore.activeBranchId || 'main',
         customerId: customer.id,
@@ -455,50 +479,63 @@ export const useBusinessStore = defineStore('business', {
         issueDate: new Date().toISOString().split('T')[0],
         dueDate: payload.dueDate,
         subtotal,
-        taxAmount: 0,
-        discountAmount: 0,
         totalAmount,
-        amountPaid: 0,
-        status: 'issued',
         notes: payload.notes,
-        items: invoiceItems,
-        brandingSnapshot: { ...authStore.activeBusiness?.branding },
-        createdAt: new Date().toISOString()
+        items: invoiceItems
       };
 
-      this.invoices.unshift(invoice);
-      customer.outstandingDebt = (customer.outstandingDebt || 0) + totalAmount;
+      const res = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(invoicePayload)
+      });
 
-      this.saveWorkspaceData();
-      return invoice;
+      if (res.ok) {
+        const data = await res.json();
+        const invoice: Invoice = {
+          ...invoicePayload,
+          id: data.invoiceId,
+          amountPaid: 0,
+          status: 'issued',
+          discountAmount: 0,
+          taxAmount: 0,
+          items: invoiceItems.map(i => ({ ...i, id: 'temp' })),
+          brandingSnapshot: { ...authStore.activeBusiness?.branding },
+          createdAt: data.invoice.created_at
+        };
+        this.invoices.unshift(invoice);
+        customer.outstandingDebt = (customer.outstandingDebt || 0) + totalAmount;
+        return invoice;
+      }
     },
 
-    recordExpense(payload: {
+    async recordExpense(payload: {
       category: Expense['category'];
       amount: number;
       paymentMethod: string;
       description: string;
       expenseDate: string;
-    }): Expense {
+    }) {
       const authStore = useAuthStore();
-      const expense: Expense = {
-        id: 'exp_' + Math.random().toString(36).substring(2, 9),
+      
+      const expensePayload = {
         businessId: authStore.activeBusinessId!,
         branchId: authStore.activeBranchId || 'main',
-        branchName: authStore.activeBranch?.name || 'Main Branch',
         recordedByUserId: authStore.user?.id || 'usr_staff',
-        recordedByName: authStore.user?.fullName || 'Staff',
-        category: payload.category,
-        amount: payload.amount,
-        paymentMethod: payload.paymentMethod,
-        description: payload.description,
-        expenseDate: payload.expenseDate,
-        createdAt: new Date().toISOString()
+        ...payload
       };
 
-      this.expenses.unshift(expense);
-      this.saveWorkspaceData();
-      return expense;
+      const res = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(expensePayload)
+      });
+
+      if (res.ok) {
+        const expense = await res.json();
+        this.expenses.unshift(expense);
+        return expense;
+      }
     }
   }
 });

@@ -217,7 +217,7 @@ const route = useRoute();
 
 const handleEmailLogin = async () => {
   try {
-    await authStore.loginWithEmail(email.value);
+    await authStore.loginWithEmail(email.value, password.value);
     businessStore.initializeWorkspaceData();
     const redirect = route.query.redirect as string || '/dashboard';
     router.push(redirect);

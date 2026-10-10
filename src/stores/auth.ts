@@ -220,15 +220,15 @@ export const useAuthStore = defineStore('auth', {
           }
         }
 
-        const dbData = await api.syncUserSession({
-          id: 'usr_' + Math.random().toString(36).substring(2, 9),
-          email,
-          user_metadata: { full_name: email.split('@')[0] }
-        });
+        const dbData = await api.getUserByEmail(email);
         this.setUser(dbData.user);
+        if (dbData.businesses && dbData.businesses.length > 0) {
+          this.businesses = dbData.businesses;
+          this.setActiveBusiness(dbData.businesses[0].id);
+        }
         return dbData.user;
       } catch (err: any) {
-        this.error = err.message || 'Login failed';
+        this.error = err.message || 'Login failed - User not found';
         throw err;
       } finally {
         this.isLoading = false;

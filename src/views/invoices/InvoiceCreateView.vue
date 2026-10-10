@@ -126,19 +126,21 @@ const removeLineItem = (idx: number) => {
   lineItems.value.splice(idx, 1);
 };
 
-const handleCreateCustomer = () => {
+const handleCreateCustomer = async () => {
   if (newCustomerName.value) {
-    const cust = businessStore.addCustomer({ name: newCustomerName.value, phone: newCustomerPhone.value, creditLimit: 0 });
-    customerId.value = cust.id;
+    const cust = await businessStore.addCustomer({ name: newCustomerName.value, phone: newCustomerPhone.value, creditLimit: 0 });
+    if (cust) {
+      customerId.value = cust.id;
+    }
     showCustomerModal.value = false;
     newCustomerName.value = '';
     newCustomerPhone.value = '';
   }
 };
 
-const handleCreateInvoice = () => {
+const handleCreateInvoice = async () => {
   try {
-    businessStore.createInvoice({
+    await businessStore.createInvoice({
       customerId: customerId.value,
       dueDate: dueDate.value,
       items: lineItems.value,
