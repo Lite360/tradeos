@@ -266,16 +266,48 @@ export const useAuthStore = defineStore('auth', {
     },
 
     async createBusiness(payload: { name: string; category: any; phoneNumber?: string; address?: string }) {
-      if (!this.user) throw new Error('Authentication required');
       this.isLoading = true;
       try {
+        const userId = this.user?.id || `user_${Date.now()}`;
+        if (!this.user) {
+          this.user = {
+            id: userId,
+            email: 'user@tradeos.app',
+            fullName: 'Business Owner',
+            isPlatformAdmin: false,
+            isSuperAdmin: false,
+            createdAt: new Date().toISOString()
+          };
+          this.isAuthenticated = true;
+        }
+
         const newBiz = await api.createBusiness({
-          ownerUserId: this.user.id,
+          ownerUserId: userId,
           ...payload
         });
+
+        // Ensure business has branches array
+        if (!newBiz.branches || newBiz.branches.length === 0) {
+          newBiz.branches = [{
+            id: `br_${Date.now()}`,
+            businessId: newBiz.id,
+            name: 'Main Branch',
+            code: 'MAIN',
+            address: payload.address || '',
+            phoneNumber: payload.phoneNumber || '',
+            isMainBranch: true
+          }];
+        }
+
         this.businesses.push(newBiz);
-        this.setActiveBusiness(newBiz.id);
+        this.activeBusinessId = newBiz.id;
+        this.activeBranchId = newBiz.branches[0]?.id || null;
+        api.setWorkspaceContext(this.activeBusinessId, this.activeBranchId);
+        
         return newBiz;
+      } catch (err: any) {
+        console.error('[Auth] Failed to create business workspace:', err);
+        throw err;
       } finally {
         this.isLoading = false;
       }

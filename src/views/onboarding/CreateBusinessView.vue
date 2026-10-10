@@ -100,7 +100,10 @@ const categoryOptions: { value: RetailCategory; label: string; unitDesc: string 
   { value: 'general', label: 'General Merchandise', unitDesc: 'Standard Stock Units' }
 ];
 
+const errorMessage = ref('');
+
 const handleCreateBusiness = async () => {
+  errorMessage.value = '';
   try {
     await authStore.createBusiness({
       name: name.value,
@@ -109,7 +112,10 @@ const handleCreateBusiness = async () => {
       address: address.value
     });
     businessStore.initializeWorkspaceData();
-    router.push('/dashboard');
-  } catch {}
+    await router.push('/dashboard');
+  } catch (err: any) {
+    console.error('Failed to create business:', err);
+    errorMessage.value = err?.message || 'Failed to setup business. Please try again.';
+  }
 };
 </script>
