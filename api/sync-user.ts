@@ -140,7 +140,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         WHERE b.owner_user_id = $1
         GROUP BY b.id;
         `,
-        [userId]
+        [profile.id]
       );
 
       return res.status(200).json({
